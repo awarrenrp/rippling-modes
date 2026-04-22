@@ -1,0 +1,10 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24">
+  <!-- Up arrow -->
+  <polygon points="12,2 9,7 11,7 11,11 13,11 13,7 15,7" fill="#333"/>
+  <!-- Down arrow -->
+  <polygon points="12,22 15,17 13,17 13,13 11,13 11,17 9,17" fill="#333"/>
+  <!-- Left arrow -->
+  <polygon points="2,12 7,9 7,11 11,11 11,13 7,13 7,15" fill="#333"/>
+  <!-- Right arrow -->
+  <polygon points="22,12 17,15 17,13 13,13 13,11 17,11 17,9" fill="#333"/>
+</svg>
