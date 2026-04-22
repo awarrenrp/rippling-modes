@@ -428,9 +428,9 @@ function ArtifactShell({
   children: React.ReactNode
 }) {
   return (
-    <div style={{ background: 'var(--grey-100)', border: '1px solid var(--grey-200)', borderRadius: 10, overflow: 'hidden', width: '100%', boxShadow: '0 1px 2px 0 rgba(0,0,0,0.10)' }}>
-      {/* Header */}
-      <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '10px 14px', borderBottom: '1px solid var(--grey-200)', background: 'var(--grey-200)' }}>
+    <div style={{ border: '1px solid var(--grey-200)', borderRadius: 10, overflow: 'hidden', width: '100%', boxShadow: '0 1px 2px 0 rgba(0,0,0,0.10)' }}>
+      {/* Header — grey-100 */}
+      <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '10px 14px', borderBottom: '1px solid var(--grey-200)', background: 'var(--grey-100)' }}>
         {icon && <Icon name={icon} size={14} style={{ color: '#888', flexShrink: 0 }} />}
         <div style={{ flex: 1, minWidth: 0 }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
@@ -442,7 +442,10 @@ function ArtifactShell({
           {subtitle && <div style={{ fontSize: 10.5, color: '#aaa', marginTop: 1 }}>{subtitle}</div>}
         </div>
       </div>
-      {children}
+      {/* Content — grey-50 */}
+      <div style={{ background: 'var(--grey-50)' }}>
+        {children}
+      </div>
     </div>
   )
 }
@@ -773,6 +776,7 @@ export function ChatPanel({ mode, orientation = 'sidebar', onOrientationChange, 
   const [showHistory, setShowHistory] = useState(false)
   const [showMoreMenu, setShowMoreMenu] = useState(false)
   const [showReportPanel, setShowReportPanel] = useState(false)
+  const [pendingReportOpen, setPendingReportOpen] = useState(false)
   const bottomRef = useRef<HTMLDivElement>(null)
   const hasSentInitial = useRef(false)
   const moreMenuRef    = useRef<HTMLDivElement>(null)
@@ -783,6 +787,15 @@ export function ChatPanel({ mode, orientation = 'sidebar', onOrientationChange, 
   useEffect(() => { isMounted.current = true }, [])
 
   const isFullChat = mode === 'fullchat'
+
+  // Once we've transitioned to fullchat (triggered by clicking the report card
+  // from sidebar mode), open the report panel automatically.
+  useEffect(() => {
+    if (isFullChat && pendingReportOpen) {
+      setShowReportPanel(true)
+      setPendingReportOpen(false)
+    }
+  }, [isFullChat, pendingReportOpen])
   const isCopilot = mode === 'copilot'
   const isCanvas = mode === 'canvas'
 
@@ -1141,6 +1154,18 @@ export function ChatPanel({ mode, orientation = 'sidebar', onOrientationChange, 
                 </AnimatePresence>
               </div>
             )}
+
+            {/* Close */}
+            {onClose && (
+              <motion.button
+                onClick={onClose}
+                whileHover={{ scale: 1.08 }} whileTap={{ scale: 0.94 }}
+                title="Close"
+                style={headerIconBtn(false)}
+              >
+                <Icon name="close" size={18} />
+              </motion.button>
+            )}
           </>
         )}
       </div>
@@ -1150,9 +1175,9 @@ export function ChatPanel({ mode, orientation = 'sidebar', onOrientationChange, 
         {isCopilot && showHistory && (
           <motion.div
             key="history"
-            initial={{ x: '100%' }}
+            initial={{ x: '-100%' }}
             animate={{ x: 0 }}
-            exit={{ x: '100%' }}
+            exit={{ x: '-100%' }}
             transition={{ type: 'spring', stiffness: 340, damping: 36 }}
             style={{
               position: 'absolute',
@@ -1212,14 +1237,18 @@ export function ChatPanel({ mode, orientation = 'sidebar', onOrientationChange, 
         style={{
           flex: 1,
           overflowY: 'auto',
-          padding: isFullChat ? '40px 20%' : '16px 14px',
-          display: 'flex',
-          flexDirection: 'column',
-          gap: 24,
-          transition: 'padding 0.3s',
           background: panelBg,
         }}
       >
+        {/* Inner column — capped at 730px in fullchat */}
+        <div style={{
+          maxWidth: isFullChat ? 730 : 'none',
+          margin: isFullChat ? '0 auto' : undefined,
+          padding: isFullChat ? '40px 16px' : '16px 14px',
+          display: 'flex',
+          flexDirection: 'column',
+          gap: 24,
+        }}>
         {/* ── Empty state hero ── */}
         <AnimatePresence>
           {showEmptyHero && (
@@ -1307,7 +1336,13 @@ export function ChatPanel({ mode, orientation = 'sidebar', onOrientationChange, 
                 <ReportCreatedCard
                   title={(msg as ReportCreatedMessage).title}
                   onOpen={() => {
-                    if (isFullChat) setShowReportPanel(true)
+                    if (isFullChat) {
+                      setShowReportPanel(true)
+                    } else {
+                      // From sidebar: go fullscreen first, then open report once there
+                      setPendingReportOpen(true)
+                      onOrientationChange?.('fullscreen')
+                    }
                   }}
                 />
               </motion.div>
@@ -1317,22 +1352,25 @@ export function ChatPanel({ mode, orientation = 'sidebar', onOrientationChange, 
           // ── Artifact messages ──
           const isArtifact = msg.type === 'table-sm' || msg.type === 'table-lg' || msg.type === 'dashboard' || msg.type === 'candidate' || msg.type === 'expense' || msg.type === 'chart'
           if (isArtifact) {
+            // table-lg breaks out to full container width in fullchat (wide data needs room)
+            const isComplexTable = msg.type === 'table-lg'
             return (
               <motion.div
                 key={msg.id}
                 initial={isMounted.current ? { opacity: 0, y: 8 } : false}
                 animate={{ opacity: 1, y: 0 }}
                 transition={{ type: 'spring', stiffness: 400, damping: 30 }}
-                style={{ display: 'flex', flexDirection: 'column', gap: 4 }}
+                style={isFullChat && isComplexTable ? {
+                  marginLeft: 'calc(-1 * max(0px, calc(50vw - 365px - 16px)))',
+                  marginRight: 'calc(-1 * max(0px, calc(50vw - 365px - 16px)))',
+                } : {}}
               >
-                <div style={{ maxWidth: isFullChat ? 680 : '100%' }}>
-                  {msg.type === 'chart'     && <ChartCard title={(msg as ChartMessage).title} data={(msg as ChartMessage).data} />}
-                  {msg.type === 'table-sm'  && <TableSmallArtifact cw={cw} />}
-                  {msg.type === 'table-lg'  && <TableLargeArtifact cw={cw} />}
-                  {msg.type === 'dashboard' && <DashboardArtifact  cw={cw} />}
-                  {msg.type === 'candidate' && <CandidateProfileArtifact cw={cw} />}
-                  {msg.type === 'expense'   && <ExpenseArtifact    cw={cw} />}
-                </div>
+                {msg.type === 'chart'     && <ChartCard title={(msg as ChartMessage).title} data={(msg as ChartMessage).data} />}
+                {msg.type === 'table-sm'  && <TableSmallArtifact cw={cw} />}
+                {msg.type === 'table-lg'  && <TableLargeArtifact cw={cw} />}
+                {msg.type === 'dashboard' && <DashboardArtifact  cw={cw} />}
+                {msg.type === 'candidate' && <CandidateProfileArtifact cw={cw} />}
+                {msg.type === 'expense'   && <ExpenseArtifact    cw={cw} />}
               </motion.div>
             )
           }
@@ -1352,7 +1390,7 @@ export function ChatPanel({ mode, orientation = 'sidebar', onOrientationChange, 
             >
               <div
                 style={{
-                  maxWidth: isFullChat ? 580 : '88%',
+                  maxWidth: isFullChat ? 680 : '88%',
                   padding: msg.role === 'user' ? '9px 14px' : '0',
                   borderRadius: msg.role === 'user' ? 20 : 0,
                   background: msg.role === 'user' ? '#f0f0f0' : 'transparent',
@@ -1368,6 +1406,7 @@ export function ChatPanel({ mode, orientation = 'sidebar', onOrientationChange, 
           )
         })}
         <div ref={bottomRef} />
+        </div>{/* end inner column */}
       </div>
 
       {/* Suggestions — full chat only */}
@@ -1376,11 +1415,14 @@ export function ChatPanel({ mode, orientation = 'sidebar', onOrientationChange, 
           initial={{ opacity: 0 }}
           animate={{ opacity: 1 }}
           style={{
-            padding: '0 20% 12px',
+            maxWidth: 730,
+            margin: '0 auto',
+            padding: '0 16px 12px',
+            width: '100%',
+            boxSizing: 'border-box',
             display: 'flex',
             gap: 8,
             flexWrap: 'wrap',
-            background: panelBg,
           }}
         >
           {SUGGESTED.map((s) => (
@@ -1408,11 +1450,15 @@ export function ChatPanel({ mode, orientation = 'sidebar', onOrientationChange, 
       {/* Input */}
       <div
         style={{
-          padding: isFullChat ? '8px 20% 16px' : '10px 14px',
+          padding: isFullChat ? '8px 16px 16px' : '10px 14px',
           borderTop: isFullChat ? 'none' : '1px solid #e8e8e8',
           background: panelBg,
           flexShrink: 0,
           transition: 'padding 0.3s',
+          maxWidth: isFullChat ? 730 : 'none',
+          margin: isFullChat ? '0 auto' : undefined,
+          width: isFullChat ? '100%' : undefined,
+          boxSizing: 'border-box',
         }}
       >
         {isFullChat ? (

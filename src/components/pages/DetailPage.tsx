@@ -223,7 +223,7 @@ export function DetailPage({ onAskAI }: DetailPageProps) {
                     <span style={{ fontSize: 11, color: '#bbb' }}>{t.ticketId}</span>
                     {hoveredTicket === t.id && onAskAI ? (
                       <div style={{ marginLeft: 'auto' }}>
-                        <AskAIChip onClick={() => onAskAI(`Summarize the "${t.title}" ticket and suggest next steps`)} variant="icon" />
+                        <AskAIChip onClick={() => onAskAI(`Summarize the "${t.title}" ticket and suggest next steps`)} />
                       </div>
                     ) : (
                       <span style={{ fontSize: 11, color: '#ccc', marginLeft: 'auto' }}>{t.date}</span>

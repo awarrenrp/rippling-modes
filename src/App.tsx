@@ -28,11 +28,13 @@ export type ColorScheme = 'white' | 'grey' | 'variable'
 
 export default function App() {
   const [interactionModel, setInteractionModel] = useState<'in' | 'out'>('out')
-  const [elevation, setElevation]               = useState<'base' | 'shadow'>('base')
+  const [elevation, setElevation]               = useState<'base' | 'shadow' | 'variable'>('base')
+  const [hoveredPanel, setHoveredPanel]         = useState<'chat' | 'nav' | null>(null)
   const [colorScheme, setColorScheme]           = useState<ColorScheme>('variable')
   const [chatFill, setChatFill]                 = useState<'filled' | 'empty'>('filled')
+  const [corners, setCorners]                   = useState<'none' | 'round'>('none')
   const [activePage, setActivePage]             = useState<PageId | null>(null)
-  const [chatOpen, setChatOpen]                 = useState(false)
+  const [chatOpen, setChatOpen]                 = useState(true)
   const [chatOrientation, setChatOrientation]   = useState<ChatOrientation>('sidebar')
   const [pendingMessage, setPendingMessage]     = useState('')
   const [reportFullscreen, setReportFullscreen] = useState(false)
@@ -112,7 +114,7 @@ export default function App() {
   }
   // ────────────────────────────────────────────────────────────────────────────
 
-  const showNav = true
+  const showNav = !isFullchat
 
   function handleReportFullscreen() {
     // Report takes over — dismiss chat, show report as a full-screen page
@@ -197,13 +199,21 @@ export default function App() {
     floatResizeState.current = null
   }
 
+  // When elevation = 'variable', shadow tracks the hovered panel
+  const navHasShadow  = elevation === 'shadow' || (elevation === 'variable' && hoveredPanel === 'nav')
+  const chatHasShadow = elevation === 'shadow' || (elevation === 'variable' && hoveredPanel === 'chat')
+  // The prop we pass down — NavPanel + ChatPanel only need to know shadow vs base
+  const navElevation  = navHasShadow  ? 'shadow' : 'base'
+  const chatElevation = chatHasShadow ? 'shadow' : 'base'
+
+  // When colorScheme = 'variable', background tracks the hovered panel
   const navBg = colorScheme === 'white' ? '#ffffff'
-    : colorScheme === 'grey' ? 'var(--grey-200)'
-    : 'var(--grey-100)'
+    : colorScheme === 'grey'     ? 'var(--grey-200)'
+    : 'var(--grey-100)'                            // variable: nav always grey-100
 
   const chatBg = colorScheme === 'white' ? '#ffffff'
-    : colorScheme === 'grey' ? 'var(--grey-200)'
-    : '#ffffff'
+    : colorScheme === 'grey'     ? 'var(--grey-200)'
+    : '#ffffff'                                    // variable: chat always white
 
   // Home page background — white in grey scheme, grey-100 otherwise
   const pageBg = colorScheme === 'grey' ? 'var(--grey-50)' : 'var(--grey-100)'
@@ -241,30 +251,6 @@ export default function App() {
         )}
       </AnimatePresence>
 
-      {/* Fullscreen close button */}
-      <AnimatePresence>
-        {isFullchat && (
-          <motion.button
-            key="fullscreen-close"
-            initial={{ opacity: 0 }}
-            animate={{ opacity: 1 }}
-            exit={{ opacity: 0 }}
-            transition={{ duration: 0.15 }}
-            onClick={() => { setChatOrientation('sidebar'); setChatOpen(false) }}
-            title="Exit full screen"
-            style={{
-              position: 'fixed', top: 0, right: 16, zIndex: 300,
-              width: 30, height: 44,
-              border: 'none', background: 'transparent',
-              cursor: 'pointer',
-              display: 'flex', alignItems: 'center', justifyContent: 'center',
-              color: '#888',
-            }}
-          >
-            <Icon name="close" size={16} />
-          </motion.button>
-        )}
-      </AnimatePresence>
 
       {/* Floating chat panel */}
       <AnimatePresence>
@@ -365,7 +351,7 @@ export default function App() {
                 onOrientationChange={handleOrientationChange}
                 onClose={() => { setChatOpen(false); setChatOrientation('sidebar') }}
                 initialQuery={pendingMessage}
-                elevation={elevation}
+                elevation={chatElevation}
                 panelBg={chatBg}
                 chatFill={chatFill}
                 onReportFullscreen={handleReportFullscreen}
@@ -400,65 +386,96 @@ export default function App() {
 
             {/* Nav overlay — slides in from left on top of content */}
             {showNav && (
-              <div style={{ position: 'absolute', left: 0, top: 0, bottom: 0, zIndex: 20, display: 'flex' }}>
-                <NavPanel isOpen={navOpen} onToggle={nav.toggle} activePage={activePage} onPageChange={setActivePage} elevation={elevation} background={navBg} />
+              <div
+                onMouseEnter={() => setHoveredPanel('nav')}
+                onMouseLeave={() => setHoveredPanel(null)}
+                style={{ position: 'absolute', left: 0, top: 0, bottom: 0, zIndex: 20, display: 'flex' }}
+              >
+                <NavPanel isOpen={navOpen} onToggle={nav.toggle} activePage={activePage} onPageChange={setActivePage} elevation={navElevation} background={navBg} />
               </div>
             )}
 
             {/* Chat overlay — slides in from right on top of content */}
-            <motion.div
-              style={{
-                position: 'absolute', right: 0, top: 0, bottom: 0,
-                width: panelWidthMV,
-                overflow: 'hidden', minWidth: 0,
-                display: 'flex', flexDirection: 'column',
-                borderLeft: elevation === 'shadow' || !showSidebarChat
-                  ? 'none'
-                  : '1px solid #e8e8e8',
-                boxShadow: elevation === 'shadow' && showSidebarChat
-                  ? '-4px 0 20px rgba(0,0,0,0.09), -8px 0 40px rgba(0,0,0,0.05)'
-                  : 'none',
-                zIndex: 10,
-              }}
-            >
-              {/* Drag handle */}
-              {showSidebarChat && !isFullchat && (
-                <div
-                  onPointerDown={handleResizePointerDown}
-                  onPointerMove={handleResizePointerMove}
-                  onPointerUp={handleResizePointerUp}
+            {(() => {
+              const rounded = corners === 'round' && !isFullchat
+              return (
+                <motion.div
+                  onMouseEnter={() => setHoveredPanel('chat')}
+                  onMouseLeave={() => setHoveredPanel(null)}
                   style={{
-                    position: 'absolute', left: 0, top: 0, bottom: 0,
-                    width: 6, cursor: 'col-resize', zIndex: 10,
+                    position: 'absolute',
+                    right:   rounded ? 16 : 0,
+                    top:     rounded ? 16 : 0,
+                    bottom:  rounded ? 16 : 0,
+                    width: panelWidthMV,
+                    overflow: rounded ? 'visible' : 'hidden',
+                    minWidth: 0,
+                    display: 'flex', flexDirection: 'column',
+                    transition: 'right 0.25s ease, top 0.25s ease, bottom 0.25s ease, box-shadow 0.2s ease',
+                    borderLeft: !rounded && !chatHasShadow && showSidebarChat ? '1px solid #e8e8e8' : 'none',
+                    boxShadow: !rounded && chatHasShadow && showSidebarChat
+                      ? '-4px 0 20px rgba(0,0,0,0.09), -8px 0 40px rgba(0,0,0,0.05)'
+                      : 'none',
+                    zIndex: 10,
                   }}
-                />
-              )}
-              {showSidebarChat && (
-                <div style={{ height: '100%', width: '100%', display: 'flex', flexDirection: 'column' }}>
-                  <ChatPanel
-                    mode={chatMode}
-                    orientation={chatOrientation}
-                    onOrientationChange={handleOrientationChange}
-                    onClose={
-                      isFullchat
-                        ? () => { setChatOrientation('sidebar'); setChatOpen(false) }
-                        : () => setChatOpen(false)
-                    }
-                    initialQuery={pendingMessage}
-                    elevation={elevation}
-                    panelBg={chatBg}
-                    chatFill={chatFill}
-                    onReportFullscreen={handleReportFullscreen}
-                  />
-                </div>
-              )}
-            </motion.div>
+                >
+                  {/* Drag handle */}
+                  {showSidebarChat && !isFullchat && (
+                    <div
+                      onPointerDown={handleResizePointerDown}
+                      onPointerMove={handleResizePointerMove}
+                      onPointerUp={handleResizePointerUp}
+                      style={{
+                        position: 'absolute', left: 0, top: 0, bottom: 0,
+                        width: 6, cursor: 'col-resize', zIndex: 10,
+                      }}
+                    />
+                  )}
+                  {showSidebarChat && (
+                    <div style={{
+                      height: '100%', width: '100%',
+                      display: 'flex', flexDirection: 'column',
+                      borderRadius: rounded ? 12 : 0,
+                      overflow: 'hidden',
+                      boxShadow: rounded
+                        ? '0 8px 32px rgba(0,0,0,0.14), 0 2px 8px rgba(0,0,0,0.08)'
+                        : 'none',
+                      transition: 'border-radius 0.25s ease, box-shadow 0.25s ease',
+                    }}>
+                      <ChatPanel
+                        mode={chatMode}
+                        orientation={chatOrientation}
+                        onOrientationChange={handleOrientationChange}
+                        onClose={
+                          isFullchat
+                            ? () => { setChatOrientation('sidebar'); setChatOpen(false) }
+                            : () => setChatOpen(false)
+                        }
+                        initialQuery={pendingMessage}
+                        elevation={chatElevation}
+                        panelBg={chatBg}
+                        chatFill={chatFill}
+                        onReportFullscreen={handleReportFullscreen}
+                      />
+                    </div>
+                  )}
+                </motion.div>
+              )
+            })()}
 
           </div>
         ) : (
           // ── IN: panels push content (flex row) ───────────────────────────────
           <>
-            {showNav && <NavPanel isOpen={navOpen} onToggle={nav.toggle} activePage={activePage} onPageChange={setActivePage} elevation={elevation} background={navBg} />}
+            {showNav && (
+              <div
+                onMouseEnter={() => setHoveredPanel('nav')}
+                onMouseLeave={() => setHoveredPanel(null)}
+                style={{ display: 'flex', height: '100%' }}
+              >
+                <NavPanel isOpen={navOpen} onToggle={nav.toggle} activePage={activePage} onPageChange={setActivePage} elevation={navElevation} background={navBg} />
+              </div>
+            )}
 
             <div ref={stageRef} style={{ flex: 1, display: 'flex', overflow: 'hidden', minWidth: 0 }}>
 
@@ -481,52 +498,68 @@ export default function App() {
               </div>
 
               {/* Chat — width driven by panelWidthMV */}
-              <motion.div
-                style={{
-                  width: panelWidthMV,
-                  overflow: 'hidden', minWidth: 0,
-                  display: 'flex', flexDirection: 'column',
-                  borderLeft: elevation === 'shadow' || !showSidebarChat
-                    ? 'none'
-                    : '1px solid #e8e8e8',
-                  boxShadow: elevation === 'shadow' && showSidebarChat
-                    ? '-4px 0 20px rgba(0,0,0,0.09), -8px 0 40px rgba(0,0,0,0.05)'
-                    : 'none',
-                  position: 'relative', zIndex: 2,
-                }}
-              >
-                {/* Drag handle */}
-                {showSidebarChat && !isFullchat && (
-                  <div
-                    onPointerDown={handleResizePointerDown}
-                    onPointerMove={handleResizePointerMove}
-                    onPointerUp={handleResizePointerUp}
+              {(() => {
+                const rounded = corners === 'round' && !isFullchat
+                return (
+                  <motion.div
+                    onMouseEnter={() => setHoveredPanel('chat')}
+                    onMouseLeave={() => setHoveredPanel(null)}
                     style={{
-                      position: 'absolute', left: 0, top: 0, bottom: 0,
-                      width: 6, cursor: 'col-resize', zIndex: 10,
+                      width: panelWidthMV,
+                      overflow: rounded ? 'visible' : 'hidden',
+                      minWidth: 0,
+                      display: 'flex', flexDirection: 'column',
+                      padding: rounded ? '16px 16px 16px 0' : 0,
+                      borderLeft: !rounded && !chatHasShadow && showSidebarChat ? '1px solid #e8e8e8' : 'none',
+                      boxShadow: !rounded && chatHasShadow && showSidebarChat
+                        ? '-4px 0 20px rgba(0,0,0,0.09), -8px 0 40px rgba(0,0,0,0.05)'
+                        : 'none',
+                      transition: 'box-shadow 0.2s ease, padding 0.25s ease',
+                      position: 'relative', zIndex: 2,
                     }}
-                  />
-                )}
-                {showSidebarChat && (
-                  <div style={{ height: '100%', width: '100%', display: 'flex', flexDirection: 'column' }}>
-                    <ChatPanel
-                      mode={chatMode}
-                      orientation={chatOrientation}
-                      onOrientationChange={handleOrientationChange}
-                      onClose={
-                        isFullchat
-                          ? () => { setChatOrientation('sidebar'); setChatOpen(false) }
-                          : () => setChatOpen(false)
-                      }
-                      initialQuery={pendingMessage}
-                      elevation={elevation}
-                      panelBg={chatBg}
-                      chatFill={chatFill}
-                      onReportFullscreen={handleReportFullscreen}
-                    />
-                  </div>
-                )}
-              </motion.div>
+                  >
+                    {/* Drag handle */}
+                    {showSidebarChat && !isFullchat && (
+                      <div
+                        onPointerDown={handleResizePointerDown}
+                        onPointerMove={handleResizePointerMove}
+                        onPointerUp={handleResizePointerUp}
+                        style={{
+                          position: 'absolute', left: 0, top: 0, bottom: 0,
+                          width: 6, cursor: 'col-resize', zIndex: 10,
+                        }}
+                      />
+                    )}
+                    {showSidebarChat && (
+                      <div style={{
+                        flex: 1, display: 'flex', flexDirection: 'column',
+                        borderRadius: rounded ? 12 : 0,
+                        overflow: 'hidden',
+                        boxShadow: rounded
+                          ? '0 8px 32px rgba(0,0,0,0.14), 0 2px 8px rgba(0,0,0,0.08)'
+                          : 'none',
+                        transition: 'border-radius 0.25s ease, box-shadow 0.25s ease',
+                      }}>
+                        <ChatPanel
+                          mode={chatMode}
+                          orientation={chatOrientation}
+                          onOrientationChange={handleOrientationChange}
+                          onClose={
+                            isFullchat
+                              ? () => { setChatOrientation('sidebar'); setChatOpen(false) }
+                              : () => setChatOpen(false)
+                          }
+                          initialQuery={pendingMessage}
+                          elevation={chatElevation}
+                          panelBg={chatBg}
+                          chatFill={chatFill}
+                          onReportFullscreen={handleReportFullscreen}
+                        />
+                      </div>
+                    )}
+                  </motion.div>
+                )
+              })()}
 
             </div>
           </>
@@ -588,7 +621,12 @@ export default function App() {
         model={interactionModel} onModelChange={setInteractionModel}
         elevation={elevation}    onElevationChange={setElevation}
         colorScheme={colorScheme} onColorSchemeChange={setColorScheme}
-        chatFill={chatFill}      onChatFillChange={setChatFill}
+        corners={corners}        onCornersChange={setCorners}
+        chatFill={chatFill}      onChatFillChange={(f) => {
+          setChatFill(f)
+          // Open the chat panel so the fill change is immediately visible
+          if (!chatOpen) { setChatOpen(true); setChatOrientation('sidebar') }
+        }}
       />
     </div>
   )
@@ -635,11 +673,13 @@ function PrototypeOptions({
   model, onModelChange,
   elevation, onElevationChange,
   colorScheme, onColorSchemeChange,
+  corners, onCornersChange,
   chatFill, onChatFillChange,
 }: {
   model: 'in' | 'out'; onModelChange: (m: 'in' | 'out') => void
-  elevation: 'base' | 'shadow'; onElevationChange: (e: 'base' | 'shadow') => void
+  elevation: 'base' | 'shadow' | 'variable'; onElevationChange: (e: 'base' | 'shadow' | 'variable') => void
   colorScheme: ColorScheme; onColorSchemeChange: (c: ColorScheme) => void
+  corners: 'none' | 'round'; onCornersChange: (c: 'none' | 'round') => void
   chatFill: 'filled' | 'empty'; onChatFillChange: (f: 'filled' | 'empty') => void
 }) {
   const [open, setOpen] = useState(false)
@@ -674,7 +714,11 @@ function PrototypeOptions({
             />
             <OptionRow
               label="Height"
-              options={[{ value: 'base', label: 'Base' }, { value: 'shadow', label: 'Shadow' }]}
+              options={[
+                { value: 'base',     label: 'Base' },
+                { value: 'shadow',   label: 'Shadow' },
+                { value: 'variable', label: 'Variable' },
+              ]}
               value={elevation} onChange={onElevationChange}
             />
             <OptionRow
@@ -685,6 +729,14 @@ function PrototypeOptions({
                 { value: 'variable', label: 'Variable' },
               ]}
               value={colorScheme} onChange={onColorSchemeChange}
+            />
+            <OptionRow
+              label="Corners"
+              options={[
+                { value: 'none',  label: 'None' },
+                { value: 'round', label: 'Round' },
+              ]}
+              value={corners} onChange={onCornersChange}
             />
             <OptionRow
               label="Chat panel"

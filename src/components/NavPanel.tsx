@@ -7,7 +7,7 @@ interface NavPanelProps {
   onToggle: () => void
   activePage: PageId | null
   onPageChange: (page: PageId | null) => void
-  elevation?: 'base' | 'shadow'
+  elevation?: 'base' | 'shadow' | 'variable'
   background?: string
 }
 
@@ -47,6 +47,7 @@ export function NavPanel({ isOpen, onToggle, activePage, onPageChange, elevation
         style={{
           width: NAV_WIDTH, height: '100%',
           background,
+          transition: 'background 0.18s ease',
           display: 'flex', flexDirection: 'column',
           paddingTop: 8,
         }}
