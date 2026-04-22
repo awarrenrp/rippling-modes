@@ -1595,6 +1595,6 @@ export function ChatPanel({ mode, orientation = 'sidebar', onOrientationChange, 
         )}
       </AnimatePresence>
 
-    </div>{/* end outer row */}
+    </div>
   )
 }
