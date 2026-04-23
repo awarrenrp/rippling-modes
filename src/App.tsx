@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef, useCallback } from 'react'
-import { AnimatePresence, motion, useMotionValue, animate } from 'motion/react'
+import { AnimatePresence, motion, useMotionValue, useTransform, animate } from 'motion/react'
 import { Icon } from './components/Icon'
 import { ModeBar, type Mode } from './components/ModeBar'
 import { NavPanel, NAV_WIDTH } from './components/NavPanel'
@@ -61,9 +61,10 @@ export default function App() {
   }, [isNarrow]) // eslint-disable-line react-hooks/exhaustive-deps
 
   // ── Drag-to-resize (shared by both interaction models) ───────────────────────
-  const stageRef     = useRef<HTMLDivElement>(null)
-  const panelWidthMV = useMotionValue(0)
-  const dragStartRef = useRef<{ clientX: number } | null>(null)
+  const stageRef       = useRef<HTMLDivElement>(null)
+  const panelWidthMV   = useMotionValue(0)
+  const dragStartW     = useRef<number>(0)
+  const dragStartX     = useRef<number | null>(null)
 
   // Keep panelWidthMV in sync with chat open/close state and responsive width
   useEffect(() => {
@@ -73,43 +74,61 @@ export default function App() {
     } else if (chatInSidebar) {
       animate(panelWidthMV, chatWidth, SPRING)
     } else {
-      // floating or closed — collapse the sidebar slot to 0 in both models
       animate(panelWidthMV, 0, SPRING)
     }
   }, [chatOpen, chatOrientation, interactionModel, chatWidth]) // eslint-disable-line
+
+  // Fade page content out as panel widens toward full-screen
+  const MIN_CHAT_W = 260
+  const contentOpacityMV = useTransform(panelWidthMV, (w) => {
+    const containerW = stageRef.current?.clientWidth ?? window.innerWidth
+    if (containerW <= 0) return 1
+    // 1 at sidebar width → 0 at 75% container width
+    const fadeStart = chatWidth
+    const fadeEnd   = containerW * 0.75
+    if (w <= fadeStart) return 1
+    if (w >= fadeEnd)   return 0
+    return 1 - (w - fadeStart) / (fadeEnd - fadeStart)
+  })
 
   function handleResizePointerDown(e: React.PointerEvent) {
     e.preventDefault()
     ;(e.currentTarget as HTMLElement).setPointerCapture(e.pointerId)
     panelWidthMV.stop()
-    dragStartRef.current = { clientX: e.clientX }
+    dragStartX.current = e.clientX
+    dragStartW.current = panelWidthMV.get()
   }
 
   function handleResizePointerMove(e: React.PointerEvent) {
-    if (!dragStartRef.current) return
-    const delta     = dragStartRef.current.clientX - e.clientX
+    if (dragStartX.current === null) return
+    const delta      = dragStartX.current - e.clientX          // left = grow, right = shrink
     const containerW = stageRef.current?.clientWidth ?? window.innerWidth
-    const newW      = Math.min(Math.max(chatWidth, chatWidth + delta), containerW - 16)
+    const newW       = Math.min(Math.max(MIN_CHAT_W, dragStartW.current + delta), containerW - 16)
     panelWidthMV.set(newW)
   }
 
   function handleResizePointerUp(_e: React.PointerEvent) {
-    if (!dragStartRef.current) return
-    dragStartRef.current = null
+    if (dragStartX.current === null) return
+    dragStartX.current = null
     const containerW = stageRef.current?.clientWidth ?? window.innerWidth
     const currentW   = panelWidthMV.get()
 
-    if (currentW > containerW * 0.55) {
+    if (currentW > containerW * 0.65) {
+      // Snap to fullscreen
       animate(panelWidthMV, containerW, {
         ...SPRING,
         onComplete: () => {
           setChatOrientation('fullscreen')
           setChatOpen(true)
-          panelWidthMV.set(chatWidth)
         },
       })
+    } else if (currentW < MIN_CHAT_W + 20) {
+      // Snap closed
+      animate(panelWidthMV, 0, { ...SPRING, onComplete: () => setChatOpen(false) })
     } else {
+      // Snap back to nearest sidebar width
       animate(panelWidthMV, chatWidth, SPRING)
+      if (chatOrientation === 'fullscreen') setChatOrientation('sidebar')
     }
   }
   // ────────────────────────────────────────────────────────────────────────────
@@ -369,11 +388,10 @@ export default function App() {
           <div ref={stageRef} style={{ position: 'relative', flex: 1, overflow: 'hidden' }}>
 
             {/* Content — always full size behind overlay panels */}
-            <div
+            <motion.div
               style={{
                 position: 'absolute', inset: 0,
-                opacity: isFullchat ? 0 : 1,
-                transition: 'opacity 0.2s ease',
+                opacity: contentOpacityMV,
                 pointerEvents: isFullchat ? 'none' : 'auto',
                 display: 'flex', flexDirection: 'column',
               }}
@@ -382,7 +400,7 @@ export default function App() {
                 ? <CopilotContent onAskAI={openChatWithMessage} chatOpen={chatOpen} elevation={elevation} pageBg={pageBg} />
                 : <PageContent activePage={activePage} onAskAI={openChatWithMessage} onAskAIFromChip={openChatFloating} elevation={elevation} pageBg={pageBg} />
               }
-            </div>
+            </motion.div>
 
             {/* Nav overlay — slides in from left on top of content */}
             {showNav && (
@@ -411,7 +429,8 @@ export default function App() {
                     overflow: rounded ? 'visible' : 'hidden',
                     minWidth: 0,
                     display: 'flex', flexDirection: 'column',
-                    transition: 'right 0.25s ease, top 0.25s ease, bottom 0.25s ease, box-shadow 0.2s ease',
+                    background: rounded ? pageBg : 'transparent',
+                    transition: 'right 0.25s ease, top 0.25s ease, bottom 0.25s ease, box-shadow 0.2s ease, background 0.2s ease',
                     borderLeft: !rounded && !chatHasShadow && showSidebarChat ? '1px solid #e8e8e8' : 'none',
                     boxShadow: !rounded && chatHasShadow && showSidebarChat
                       ? '-4px 0 20px rgba(0,0,0,0.09), -8px 0 40px rgba(0,0,0,0.05)'
@@ -420,7 +439,7 @@ export default function App() {
                   }}
                 >
                   {/* Drag handle */}
-                  {showSidebarChat && !isFullchat && (
+                  {showSidebarChat && (
                     <div
                       onPointerDown={handleResizePointerDown}
                       onPointerMove={handleResizePointerMove}
@@ -437,7 +456,7 @@ export default function App() {
                       display: 'flex', flexDirection: 'column',
                       borderRadius: rounded ? 12 : 0,
                       overflow: 'hidden',
-                      boxShadow: rounded
+                      boxShadow: rounded && chatHasShadow
                         ? '0 8px 32px rgba(0,0,0,0.14), 0 2px 8px rgba(0,0,0,0.08)'
                         : 'none',
                       transition: 'border-radius 0.25s ease, box-shadow 0.25s ease',
@@ -480,12 +499,11 @@ export default function App() {
             <div ref={stageRef} style={{ flex: 1, display: 'flex', overflow: 'hidden', minWidth: 0 }}>
 
               {/* Main content */}
-              <div
+              <motion.div
                 style={{
                   flex: 1,
                   overflow: 'hidden', minWidth: 0,
-                  opacity: isFullchat ? 0 : 1,
-                  transition: 'opacity 0.2s ease',
+                  opacity: contentOpacityMV,
                   pointerEvents: isFullchat ? 'none' : 'auto',
                   background: 'var(--grey-100)',
                   display: 'flex', flexDirection: 'column',
@@ -495,7 +513,7 @@ export default function App() {
                 ? <CopilotContent onAskAI={openChatWithMessage} chatOpen={chatOpen} elevation={elevation} pageBg={pageBg} />
                 : <PageContent activePage={activePage} onAskAI={openChatWithMessage} onAskAIFromChip={openChatFloating} elevation={elevation} pageBg={pageBg} />
               }
-              </div>
+              </motion.div>
 
               {/* Chat — width driven by panelWidthMV */}
               {(() => {
@@ -510,16 +528,17 @@ export default function App() {
                       minWidth: 0,
                       display: 'flex', flexDirection: 'column',
                       padding: rounded ? '16px 16px 16px 0' : 0,
+                      background: rounded ? pageBg : 'transparent',
                       borderLeft: !rounded && !chatHasShadow && showSidebarChat ? '1px solid #e8e8e8' : 'none',
                       boxShadow: !rounded && chatHasShadow && showSidebarChat
                         ? '-4px 0 20px rgba(0,0,0,0.09), -8px 0 40px rgba(0,0,0,0.05)'
                         : 'none',
-                      transition: 'box-shadow 0.2s ease, padding 0.25s ease',
+                      transition: 'box-shadow 0.2s ease, padding 0.25s ease, background 0.2s ease',
                       position: 'relative', zIndex: 2,
                     }}
                   >
                     {/* Drag handle */}
-                    {showSidebarChat && !isFullchat && (
+                    {showSidebarChat && (
                       <div
                         onPointerDown={handleResizePointerDown}
                         onPointerMove={handleResizePointerMove}
@@ -535,7 +554,7 @@ export default function App() {
                         flex: 1, display: 'flex', flexDirection: 'column',
                         borderRadius: rounded ? 12 : 0,
                         overflow: 'hidden',
-                        boxShadow: rounded
+                        boxShadow: rounded && chatHasShadow
                           ? '0 8px 32px rgba(0,0,0,0.14), 0 2px 8px rgba(0,0,0,0.08)'
                           : 'none',
                         transition: 'border-radius 0.25s ease, box-shadow 0.25s ease',
