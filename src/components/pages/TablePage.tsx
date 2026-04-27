@@ -631,8 +631,15 @@ export const TablePage = memo(function TablePage({
 
                 <TableCell className="py-0 w-28">
                   <div style={{ display: 'flex', alignItems: 'center', gap: 4, justifyContent: 'flex-end' }}>
-                    {hoveredRow === person.id && onAskAI && (
-                      <AskAIChip onClick={() => onAskAI(`Tell me about ${person.name}'s AI usage and activity`)} />
+                    {hoveredRow === person.id && (onOpenFloating || onAskAI) && (
+                      <AskAIChip
+                        onClick={() => {
+                          const msg = `Tell me about ${person.name}'s AI usage and activity`
+                          // Table row: always use floating chat when available (independent of drawer mode).
+                          if (onOpenFloating) onOpenFloating(msg)
+                          else onAskAI?.(msg)
+                        }}
+                      />
                     )}
                     <button className="text-muted-foreground hover:text-foreground transition-all p-1 rounded hover:bg-neutral-100" style={{ opacity: hoveredRow === person.id ? 1 : 0 }}>
                       <MoreHorizontal size={14} />
