@@ -35,7 +35,7 @@ export function CopilotContent({
 }: {
   onAskAI: (msg: string) => void
   chatOpen: boolean
-  elevation?: 'base' | 'shadow'
+  elevation?: 'base' | 'shadow' | 'variable'
   pageBg?: string
 }) {
   const [triggerInput, setTriggerInput] = useState('')
@@ -169,7 +169,7 @@ export function CopilotContent({
           {/* Card */}
           <motion.div
             animate={{
-              boxShadow: elevation === 'base'
+              boxShadow: elevation === 'base' || elevation === 'variable'
                 ? '0 1px 3px rgba(0,0,0,0.05), 0 2px 8px rgba(0,0,0,0.04)'
                 : (isSent ? SHADOW.sent : SHADOW[phase]),
             }}

@@ -2,6 +2,9 @@ import { useState } from 'react'
 import { motion, AnimatePresence } from 'motion/react'
 import { Icon } from './Icon'
 
+/** Darker berry for top bar only (app primary / buttons stay on theme token). */
+const HEADER_BG = '#4A0039'
+
 export type Mode = 'fullchat' | 'canvas' | 'copilot'
 export type PanelState = 'floating' | 'sidebar' | 'fullscreen'
 
@@ -26,8 +29,9 @@ export function ModeBar({ navOpen = true, onNavOpen, chatOpen = false, onChatTog
     <div
       style={{
         height: 44,
-        background: 'var(--grey-200)',
-        borderBottom: '1px solid #d6d6d6',
+        background: HEADER_BG,
+        color: 'var(--primary-foreground)',
+        borderBottom: `1px solid color-mix(in srgb, var(--primary-foreground) 12%, ${HEADER_BG})`,
         display: 'flex',
         alignItems: 'center',
         flexShrink: 0,
@@ -50,7 +54,7 @@ export function ModeBar({ navOpen = true, onNavOpen, chatOpen = false, onChatTog
               width: 28, height: 28, borderRadius: 6, border: 'none',
               background: 'transparent', cursor: 'pointer',
               display: 'flex', alignItems: 'center', justifyContent: 'center',
-              color: '#555', flexShrink: 0, padding: 0,
+              color: 'var(--primary-foreground)', opacity: 0.85, flexShrink: 0, padding: 0,
             }}
           >
             <AnimatePresence mode="wait" initial={false}>
@@ -75,7 +79,7 @@ export function ModeBar({ navOpen = true, onNavOpen, chatOpen = false, onChatTog
               animate={{ opacity: 1, x: 0 }}
               exit={{ opacity: 0, x: -6 }}
               transition={{ duration: 0.15 }}
-              style={{ fontSize: 13, fontWeight: 600, color: '#111', letterSpacing: '-0.2px' }}
+              style={{ fontSize: 13, fontWeight: 600, color: 'var(--primary-foreground)', letterSpacing: '-0.2px' }}
             >
               rippling
             </motion.span>
@@ -95,8 +99,10 @@ export function ModeBar({ navOpen = true, onNavOpen, chatOpen = false, onChatTog
             display: 'flex',
             alignItems: 'center',
             gap: 7,
-            background: focused ? '#d8d8d8' : '#dfdfdf',
-            border: `1px solid ${focused ? '#bbb' : '#d2d2d2'}`,
+            background: focused
+              ? `color-mix(in srgb, var(--primary-foreground) 18%, ${HEADER_BG})`
+              : `color-mix(in srgb, var(--primary-foreground) 10%, ${HEADER_BG})`,
+            border: `1px solid color-mix(in srgb, var(--primary-foreground) ${focused ? 28 : 18}%, ${HEADER_BG})`,
             borderRadius: 6,
             padding: '0 10px',
             height: 30,
@@ -104,8 +110,8 @@ export function ModeBar({ navOpen = true, onNavOpen, chatOpen = false, onChatTog
             transition: 'background 0.15s, border-color 0.15s',
           }}
         >
-          <Icon name="search" size={15} style={{ color: '#999', flexShrink: 0 }} />
-          <span style={{ fontSize: 13, color: '#aaa', userSelect: 'none' }}>Search...</span>
+          <Icon name="search" size={15} style={{ color: 'var(--primary-foreground)', opacity: 0.5, flexShrink: 0 }} />
+          <span style={{ fontSize: 13, color: 'var(--primary-foreground)', opacity: 0.5, userSelect: 'none' }}>Search...</span>
         </button>
       </div>
 
@@ -118,22 +124,36 @@ export function ModeBar({ navOpen = true, onNavOpen, chatOpen = false, onChatTog
           title={chatOpen ? 'Close AI chat' : 'Open AI chat'}
           style={{
             width: 28, height: 28, borderRadius: 6,
-            border: chatOpen ? '1px solid #c8c8c8' : 'none',
-            background: chatOpen ? '#d8d8d8' : 'transparent',
+            border: chatOpen
+              ? `1px solid color-mix(in srgb, var(--primary-foreground) 22%, ${HEADER_BG})`
+              : 'none',
+            background: chatOpen
+              ? `color-mix(in srgb, var(--primary-foreground) 12%, ${HEADER_BG})`
+              : 'transparent',
             cursor: 'pointer',
             display: 'flex', alignItems: 'center', justifyContent: 'center',
             transition: 'background 0.15s, border-color 0.15s',
           }}
         >
-          <img src="/rippling-ai.png" width={20} height={20} style={{ display: 'block', opacity: chatOpen ? 1 : 0.55 }} />
+          <img
+            src="/rippling-ai.png"
+            width={20}
+            height={20}
+            style={{
+              display: 'block',
+              filter: 'brightness(0) invert(1)',
+              opacity: chatOpen ? 1 : 0.65,
+            }}
+          />
         </motion.button>
 
         <div
           style={{
             width: 26, height: 26, borderRadius: '50%',
-            background: '#d0d0d0',
+            background: `color-mix(in srgb, var(--primary-foreground) 20%, ${HEADER_BG})`,
             display: 'flex', alignItems: 'center', justifyContent: 'center',
-            color: '#555', fontSize: 10, fontWeight: 600, letterSpacing: '0.3px',
+            color: 'var(--primary-foreground)', fontSize: 10, fontWeight: 600, letterSpacing: '0.3px',
+            border: `1px solid color-mix(in srgb, var(--primary-foreground) 25%, ${HEADER_BG})`,
           }}
         >
           AW

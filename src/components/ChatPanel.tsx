@@ -1,6 +1,7 @@
 import React, { useState, useRef, useEffect } from 'react'
 import { motion, AnimatePresence } from 'motion/react'
 import { Icon } from './Icon'
+import { AIComposerInput } from './AIComposerInput'
 import { useContainerWidth } from '../hooks/useContainerWidth'
 import type { Mode } from './ModeBar'
 
@@ -731,6 +732,8 @@ interface ChatPanelProps {
   chatFill?: 'filled' | 'empty'
   /** Called when user wants the report panel to take over the full screen entirely */
   onReportFullscreen?: () => void
+  /** Canvas + chat left: collapse the dock; shown as a control to the right of “Rippling AI”. */
+  onRequestDockCollapse?: () => void
 }
 
 // ─── Style helpers ───────────────────────────────────────────────────────────
@@ -762,7 +765,7 @@ const ORIENTATION_OPTIONS: { label: string; value: ChatOrientation; icon: string
   { label: 'Floating',   value: 'floating',   icon: 'picture_in_picture' },
 ]
 
-export function ChatPanel({ mode, orientation = 'sidebar', onOrientationChange, onClose, initialQuery, elevation = 'base', panelBg = 'var(--grey-50)', chatFill = 'filled', onReportFullscreen }: ChatPanelProps) {
+export function ChatPanel({ mode, orientation = 'sidebar', onOrientationChange, onClose, initialQuery, elevation = 'base', panelBg = 'var(--grey-50)', chatFill = 'filled', onReportFullscreen, onRequestDockCollapse }: ChatPanelProps) {
   const [messages, setMessages] = useState<Message[]>(() => {
     if (initialQuery) {
       return [
@@ -959,6 +962,17 @@ export function ChatPanel({ mode, orientation = 'sidebar', onOrientationChange, 
                 Ready
               </span>
             </div>
+
+            {onRequestDockCollapse && (
+              <motion.button
+                onClick={onRequestDockCollapse}
+                whileHover={{ scale: 1.08 }} whileTap={{ scale: 0.94 }}
+                title="Collapse chat"
+                style={headerIconBtn(false)}
+              >
+                <Icon name="chevron_left" size={18} />
+              </motion.button>
+            )}
 
             {/* New chat */}
             <motion.button
@@ -1534,38 +1548,13 @@ export function ChatPanel({ mode, orientation = 'sidebar', onOrientationChange, 
             </div>
           </div>
         ) : (
-          /* ── Compact sidebar / copilot input ── */
-          <div style={{
-            display: 'flex', alignItems: 'center', gap: 8,
-            background: '#fafafa', borderRadius: 16,
-            padding: '11px 12px 11px 16px', border: '1px solid #e0e0e0',
-          }}>
-            <input
-              value={input}
-              onChange={(e) => setInput(e.target.value)}
-              onKeyDown={(e) => e.key === 'Enter' && sendMessage(input)}
-              placeholder="Message AI..."
-              style={{
-                flex: 1, background: 'transparent', border: 'none',
-                outline: 'none', fontSize: 14, color: '#111',
-              }}
-            />
-            <motion.button
-              onClick={() => sendMessage(input)}
-              whileHover={input.trim() ? { scale: 1.05 } : {}}
-              whileTap={input.trim() ? { scale: 0.95 } : {}}
-              style={{
-                width: 32, height: 32, borderRadius: 8, border: 'none',
-                background: input.trim() ? '#111' : '#e8e8e8',
-                color: input.trim() ? '#fff' : '#aaa',
-                cursor: input.trim() ? 'pointer' : 'default',
-                display: 'flex', alignItems: 'center', justifyContent: 'center',
-                transition: 'background 0.2s', flexShrink: 0,
-              }}
-            >
-              <Icon name="send" size={13} />
-            </motion.button>
-          </div>
+          /* ── Compact sidebar / copilot input (see AIComposerInput) ── */
+          <AIComposerInput
+            value={input}
+            onChange={setInput}
+            onSend={() => sendMessage(input)}
+            placeholder="Message AI…"
+          />
         )}
 
         {/* Footer note */}

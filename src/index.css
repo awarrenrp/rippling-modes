@@ -1,6 +1,7 @@
 @import "tailwindcss";
 
 @theme inline {
+  --color-brand:              var(--brand);
   --color-background:         var(--background);
   --color-foreground:         var(--foreground);
   --color-card:               var(--card);
@@ -41,7 +42,12 @@
   --border: #e8e8e8;
   --input: #e8e8e8;
 
-  --primary: #111111;
+  /* Brand berry — shared with app primary (ModeBar, buttons, tokens) */
+  --brand: #7A005D;
+  --brand-ring: color-mix(in srgb, var(--brand) 22%, transparent);
+  --brand-hover: color-mix(in srgb, var(--brand) 8%, #ffffff);
+
+  --primary: var(--brand);
   --primary-foreground: #ffffff;
 
   --muted: #f4f4f4;
