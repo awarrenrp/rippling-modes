@@ -216,7 +216,7 @@ function FlowNode({ node }: { node: FlowNode }) {
           <div className="flex-1 min-w-0">
             <p className="text-xs font-semibold text-foreground leading-snug">{node.title}</p>
             {node.subtitle && (
-              <p className="text-[11px] text-muted-foreground mt-0.5 leading-snug">{node.subtitle}</p>
+              <p className="text-[11px] font-normal text-muted-foreground mt-0.5 leading-snug">{node.subtitle}</p>
             )}
           </div>
 

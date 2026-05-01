@@ -6,6 +6,7 @@ import { AnimatePresence, motion, useMotionValue, animate } from 'motion/react'
 import { Icon } from './components/Icon'
 import { ModeBar, type Mode, type PanelState } from './components/ModeBar'
 import { ChatPanel } from './components/ChatPanel'
+import { ReportBuilderEditMode } from './components/ReportBuilderEditMode'
 import { PageContent, type PageId } from './components/PageContent'
 import { SearchSpotlight } from './components/SearchSpotlight'
 
@@ -48,6 +49,7 @@ export function AppV2() {
   const [chatOpen, setChatOpen]      = useState(false)
   const [pendingMessage, setPending] = useState('')
   const [searchOpen, setSearchOpen]  = useState(false)
+  const [reportBuilderEditOpen, setReportBuilderEditOpen] = useState(false)
   const windowWidth = useWindowWidth()
 
   // Auto-collapse nav when viewport is too narrow
@@ -132,6 +134,18 @@ export function AppV2() {
     setChatOpen(true)
   }
 
+  function handleOpenReportCreatedPage() {
+    setActivePage('canvas')
+    setMode('copilot')
+    setChatOpen(true)
+    panelWidthMV.set(CHAT_WIDTH)
+  }
+
+  function handleOpenReportInEditMode() {
+    setReportBuilderEditOpen(true)
+    setMode('copilot')
+  }
+
   function openChatWithMessage(msg: string) {
     setPending(msg)
     chatEntryDir.current = 'y'
@@ -152,6 +166,18 @@ export function AppV2() {
     }
   }
 
+  function handleGoHome() {
+    setActivePage(null)
+    setReportBuilderEditOpen(false)
+    setNavOpen(false)
+    setPending('')
+    if (mode === 'fullchat') {
+      setMode('copilot')
+      setChatOpen(false)
+      panelWidthMV.set(CHAT_WIDTH)
+    }
+  }
+
   const panelState: PanelState =
     mode === 'fullchat' ? 'fullscreen' :
     chatOpen            ? 'sidebar'    :
@@ -167,6 +193,7 @@ export function AppV2() {
         onModeChange={handleModeChange}
         navOpen={navOpen}
         onNavOpen={() => setNavOpen((v) => !v)}
+        onLogoClick={handleGoHome}
         chatOpen={chatOpen || mode === 'fullchat'}
         onChatToggle={handleChatToggle}
         onSearchOpen={() => setSearchOpen(true)}
@@ -331,6 +358,8 @@ export function AppV2() {
                     onExpandToggle={handleExpandToggle}
                     onClose={mode === 'fullchat' ? handleExpandToggle : () => setChatOpen(false)}
                     initialQuery={pendingMessage}
+                    onOpenReportCreatedPage={handleOpenReportCreatedPage}
+                    onOpenReportInEditMode={handleOpenReportInEditMode}
                   />
                 </motion.div>
               )}
@@ -431,6 +460,8 @@ export function AppV2() {
                       onExpandToggle={handleExpandToggle}
                       onClose={mode === 'fullchat' ? handleExpandToggle : () => setChatOpen(false)}
                       initialQuery={pendingMessage}
+                      onOpenReportCreatedPage={handleOpenReportCreatedPage}
+                      onOpenReportInEditMode={handleOpenReportInEditMode}
                     />
                   </motion.div>
                 )}
@@ -446,6 +477,28 @@ export function AppV2() {
 
       {/* ── Search spotlight ── */}
       <SearchSpotlight isOpen={searchOpen} onClose={() => setSearchOpen(false)} />
+
+      <AnimatePresence>
+        {reportBuilderEditOpen && (
+          <motion.div
+            key="report-builder-edit"
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            transition={{ duration: 0.2 }}
+            style={{
+              position: 'fixed',
+              inset: 0,
+              zIndex: 410,
+              background: '#fff',
+              display: 'flex',
+              flexDirection: 'column',
+            }}
+          >
+            <ReportBuilderEditMode onClose={() => setReportBuilderEditOpen(false)} />
+          </motion.div>
+        )}
+      </AnimatePresence>
     </div>
   )
 }

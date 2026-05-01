@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef } from 'react'
 import { AnimatePresence, motion } from 'motion/react'
-import { Icon } from './Icon'
+import { AIComposerInput } from './AIComposerInput'
 
 // ─── Constants ───────────────────────────────────────────────────────────────
 
@@ -96,7 +96,7 @@ export function CopilotContent({
           overflow: 'hidden',
         }}
       >
-        <span style={{ fontSize: 12, fontWeight: 500, color: '#999', whiteSpace: 'nowrap', letterSpacing: '0.1px' }}>
+        <span style={{ fontSize: 12, fontWeight: 400, color: '#999', whiteSpace: 'nowrap', letterSpacing: '0.1px' }}>
           Quick sign-in
         </span>
 
@@ -118,7 +118,7 @@ export function CopilotContent({
                 style={{
                   width: 18, height: 18, borderRadius: 4,
                   background: app.bg, color: app.text,
-                  fontSize: 9, fontWeight: 700,
+                  fontSize: 9, fontWeight: 400,
                   display: 'flex', alignItems: 'center', justifyContent: 'center',
                   flexShrink: 0, letterSpacing: '-0.3px',
                 }}
@@ -144,7 +144,7 @@ export function CopilotContent({
                 display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0,
               }}
             >
-              <span style={{ fontSize: 8, color: '#5f6368', fontWeight: 700, letterSpacing: '-0.5px' }}>≡</span>
+              <span style={{ fontSize: 8, color: '#5f6368', fontWeight: 400, letterSpacing: '-0.5px' }}>≡</span>
             </div>
             <span style={{ fontSize: 12, color: '#888', fontWeight: 400 }}>+16 more</span>
           </motion.button>
@@ -175,50 +175,21 @@ export function CopilotContent({
             }}
             transition={{ duration: 0.35, ease: [0.22, 1, 0.36, 1] }}
             style={{
-              background: '#ffffff',
-              borderRadius: 16,
-              border: '1px solid #e0e0e0',
+              background: 'transparent',
+              borderRadius: 8,
+              border: 'none',
               overflow: 'hidden',
             }}
           >
-            {/* Input row */}
-            <div style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '18px 16px 18px 22px' }}>
-              <img
-                src="/rippling-ai.png"
-                width={18} height={18}
-                style={{ display: 'block', opacity: isSent ? 1 : 0.25, transition: 'opacity 0.3s', flexShrink: 0 }}
-              />
-              <input
-                value={isSent ? sentQuery : triggerInput}
-                readOnly={isSent || phase !== 'idle'}
-                onChange={(e) => setTriggerInput(e.target.value)}
-                onKeyDown={(e) => e.key === 'Enter' && handleSubmit()}
-                placeholder="Describe what you want to get done..."
-                style={{
-                  flex: 1, border: 'none', outline: 'none',
-                  background: 'transparent', fontSize: 15,
-                  color: isSent ? '#aaa' : '#111',
-                  fontStyle: isSent ? 'italic' : 'normal',
-                  transition: 'color 0.25s',
-                }}
-              />
-              <motion.button
-                onClick={!isSent && phase === 'idle' ? handleSubmit : undefined}
-                whileHover={triggerInput.trim() && !isSent ? { scale: 1.06 } : {}}
-                whileTap={triggerInput.trim() && !isSent ? { scale: 0.93 } : {}}
-                animate={{ background: triggerInput.trim() && !isSent ? '#111' : '#ebebeb' }}
-                transition={{ duration: 0.2 }}
-                style={{
-                  width: 38, height: 38, borderRadius: 10, border: 'none',
-                  color: triggerInput.trim() && !isSent ? '#fff' : '#aaa',
-                  cursor: triggerInput.trim() && !isSent ? 'pointer' : 'default',
-                  display: 'flex', alignItems: 'center', justifyContent: 'center',
-                  flexShrink: 0, transition: 'color 0.2s',
-                }}
-              >
-                <Icon name="arrow_upward" size={16} />
-              </motion.button>
-            </div>
+            <AIComposerInput
+              variant="pane"
+              style={{ maxWidth: 620, width: '100%' }}
+              value={isSent ? sentQuery : triggerInput}
+              onChange={(v) => setTriggerInput(v)}
+              onSend={handleSubmit}
+              disabled={isSent || phase !== 'idle'}
+              readOnly={isSent || phase !== 'idle'}
+            />
 
             {/* Reasoning expansion */}
             <AnimatePresence>
@@ -250,7 +221,7 @@ export function CopilotContent({
                         style={{ display: 'block', filter: 'brightness(0) invert(1)' }} />
                     </div>
                     <div>
-                      <div style={{ fontSize: 11, fontWeight: 500, color: '#333', letterSpacing: '0.1px', marginBottom: 7 }}>
+                      <div style={{ fontSize: 11, fontWeight: 400, color: '#333', letterSpacing: '0.1px', marginBottom: 7 }}>
                         Rippling AI
                       </div>
                       <div style={{ display: 'flex', alignItems: 'center', gap: 5 }}>

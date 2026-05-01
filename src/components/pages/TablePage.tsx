@@ -121,23 +121,21 @@ const PLAN_STYLE: Record<Person['plan'], string> = {
 
 /** Copilot-style chat chrome for collapse drawer (matches main `ChatPanel` header). */
 function CollapseDrawerChatHeader({
-  showHistory,
-  setShowHistory,
   onNewChat,
   onPickView,
   moreOpen,
   setMoreOpen,
   moreRef,
   personName,
+  chatTitle,
 }: {
-  showHistory: boolean
-  setShowHistory: Dispatch<SetStateAction<boolean>>
   onNewChat: () => void
   onPickView: (o: ChatOrientation) => void
   moreOpen: boolean
   setMoreOpen: (v: boolean) => void
   moreRef: RefObject<HTMLDivElement | null>
   personName: string
+  chatTitle: string
 }) {
   return (
     <div
@@ -152,22 +150,11 @@ function CollapseDrawerChatHeader({
         gap: 6,
       }}
     >
-      <motion.button
-        type="button"
-        onClick={() => setShowHistory((v) => !v)}
-        whileHover={{ scale: 1.08 }}
-        whileTap={{ scale: 0.94 }}
-        title={showHistory ? 'Back to chat' : 'Chat history'}
-        style={drawerHeaderIconBtn(showHistory)}
-      >
-        <Icon name={showHistory ? 'chevron_left' : 'menu'} size={18} />
-      </motion.button>
-
       <div style={{ width: 20, height: 20, borderRadius: '50%', background: '#111', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
         <img src="/rippling-ai.png" width={10} height={10} alt="" style={{ display: 'block', filter: 'brightness(0) invert(1)' }} />
       </div>
       <div style={{ flex: 1, display: 'flex', flexDirection: 'column', justifyContent: 'center', gap: 1, minWidth: 0, padding: '4px 0' }}>
-        <span style={{ fontSize: 13, fontWeight: 500, color: '#111', letterSpacing: '-0.1px' }}>Rippling AI</span>
+        <span style={{ fontSize: 13, fontWeight: 500, color: '#111', letterSpacing: '-0.1px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{chatTitle}</span>
         <span
           style={{
             fontSize: 11, color: '#888', lineHeight: 1.25,
@@ -272,7 +259,6 @@ export const TablePage = memo(function TablePage({
   const [collapseDrawerExpanded, setCollapseDrawerExpanded] = useState(false)
   const [collapseChatMessages, setCollapseChatMessages]   = useState<MiniChatMsg[]>([])
   const [collapseChatInput, setCollapseChatInput]         = useState('')
-  const [collapseChatShowHistory, setCollapseChatShowHistory] = useState(false)
   const [collapseActiveHistoryId, setCollapseActiveHistoryId]   = useState('current')
   const [collapseChatMoreOpen, setCollapseChatMoreOpen]   = useState(false)
   const collapseChatMoreRef = useRef<HTMLDivElement>(null)
@@ -298,7 +284,6 @@ export const TablePage = memo(function TablePage({
       setCollapseDrawerExpanded(false)
       setCollapseChatMessages([])
       setCollapseChatInput('')
-      setCollapseChatShowHistory(false)
       setCollapseChatMoreOpen(false)
     }
   }, [openRow])
@@ -488,7 +473,7 @@ export const TablePage = memo(function TablePage({
                 <Search size={13} className="absolute left-2.5 top-1/2 -translate-y-1/2 text-muted-foreground" />
                 <input
                   placeholder="Search"
-                  className="pl-8 pr-3 py-1.5 text-sm bg-white focus:outline-none focus:ring-1 focus:ring-neutral-400"
+                  className="pl-8 pr-3 py-1.5 text-sm bg-white focus:outline-none focus:ring-1 focus:ring-ring"
                   style={{ border: '1px solid #e0e0e0', borderRadius: 6, width: 180 }}
                 />
               </div>
@@ -719,14 +704,13 @@ export const TablePage = memo(function TablePage({
                   type="button"
                   onClick={() => { setOpenRow(null); setAiOpen(false); setCollapseDrawerExpanded(false) }}
                   title="Close"
+                  className="flex items-center justify-center rounded-lg border-0 bg-transparent text-muted-foreground transition-colors hover:bg-neutral-100 hover:text-foreground"
                   style={{
                     position: 'absolute', top: 10, right: 10, zIndex: 3,
-                    width: 36, height: 36, borderRadius: 6, border: '1px solid #e8e8e8', background: '#fff',
-                    display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer', color: '#666',
-                    boxShadow: '0 1px 3px rgba(0,0,0,0.08)',
+                    width: 36, height: 36, cursor: 'pointer',
                   }}
                 >
-                  <X size={16} />
+                  <X size={16} strokeWidth={2} />
                 </button>
               )}
 
@@ -791,13 +775,11 @@ export const TablePage = memo(function TablePage({
                       <button
                         type="button"
                         onClick={() => { setOpenRow(null); setAiOpen(false) }}
-                        style={{
-                          width: 30, height: 30, borderRadius: 6, border: '1px solid #e8e8e8',
-                          background: '#f7f7f7', display: 'flex', alignItems: 'center',
-                          justifyContent: 'center', cursor: 'pointer', color: '#666',
-                        }}
+                        title="Close"
+                        className="flex shrink-0 items-center justify-center rounded-md border-0 bg-transparent text-muted-foreground transition-colors hover:bg-neutral-100 hover:text-foreground"
+                        style={{ width: 30, height: 30, cursor: 'pointer' }}
                       >
-                        <X size={14} />
+                        <X size={14} strokeWidth={2} />
                       </button>
                     </div>
                   </div>
@@ -831,13 +813,10 @@ export const TablePage = memo(function TablePage({
                     }
                   >
                     <CollapseDrawerChatHeader
-                      showHistory={collapseChatShowHistory}
-                      setShowHistory={setCollapseChatShowHistory}
                       onNewChat={() => {
                         setCollapseChatMessages([])
                         setCollapseChatInput('')
                         setCollapseActiveHistoryId('current')
-                        setCollapseChatShowHistory(false)
                       }}
                       onPickView={(o) => {
                         if (o === 'fullscreen') onOpenFullscreen?.()
@@ -848,55 +827,9 @@ export const TablePage = memo(function TablePage({
                       setMoreOpen={setCollapseChatMoreOpen}
                       moreRef={collapseChatMoreRef}
                       personName={openRow.name}
+                      chatTitle={COLLAPSE_DRAWER_HISTORY.find((c) => c.id === collapseActiveHistoryId)?.title ?? 'Chat'}
                     />
                     <div style={{ flex: 1, minHeight: 0, position: 'relative', display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
-                      <AnimatePresence>
-                        {collapseChatShowHistory && (
-                          <motion.div
-                            key="collapse-drw-hist"
-                            initial={{ x: '-100%' }}
-                            animate={{ x: 0 }}
-                            exit={{ x: '-100%' }}
-                            transition={{ type: 'spring', stiffness: 380, damping: 36 }}
-                            style={{
-                              position: 'absolute', top: 0, left: 0, bottom: 0, width: '100%',
-                              background: '#fff', zIndex: 25, overflowY: 'auto',
-                              display: 'flex', flexDirection: 'column', padding: '8px 10px',
-                              boxShadow: '2px 0 12px rgba(0,0,0,0.06)',
-                            }}
-                          >
-                            {COLLAPSE_DRAWER_HISTORY.map((chat) => {
-                              const isActive = chat.id === collapseActiveHistoryId
-                              return (
-                              <button
-                                key={chat.id}
-                                type="button"
-                                onClick={() => {
-                                  setCollapseActiveHistoryId(chat.id)
-                                  setCollapseChatShowHistory(false)
-                                  onOpenFullscreen?.({ initialQuery: chat.initialQuery })
-                                  // Close the record drawer so the z-50 panel does not sit above main fullscreen chat.
-                                  setOpenRow(null)
-                                  setAiOpen(false)
-                                  setCollapseDrawerExpanded(false)
-                                }}
-                                style={{
-                                  width: '100%',
-                                  padding: '8px 10px', borderRadius: 6, border: 'none',
-                                  background: isActive ? '#f0f0f0' : 'transparent',
-                                  cursor: 'pointer', textAlign: 'left', marginBottom: 2,
-                                }}
-                              >
-                                <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 2 }}>
-                                  <span style={{ fontSize: 12.5, fontWeight: isActive ? 500 : 400, color: '#111' }}>{chat.title}</span>
-                                  <span style={{ fontSize: 10, color: '#bbb' }}>{chat.date}</span>
-                                </div>
-                                <div style={{ fontSize: 11, color: '#999' }}>{chat.preview}</div>
-                              </button>
-                            )})}
-                          </motion.div>
-                        )}
-                      </AnimatePresence>
                       <EmbeddedMiniChat
                         person={openRow}
                         showHeader={false}
@@ -966,13 +899,11 @@ export const TablePage = memo(function TablePage({
                   <button
                     type="button"
                     onClick={() => { setOpenRow(null); setAiOpen(false) }}
-                    style={{
-                      width: 30, height: 30, borderRadius: 6, border: '1px solid #e8e8e8',
-                      background: '#f7f7f7', display: 'flex', alignItems: 'center',
-                      justifyContent: 'center', cursor: 'pointer', color: '#666',
-                    }}
+                    title="Close"
+                    className="flex shrink-0 items-center justify-center rounded-md border-0 bg-transparent text-muted-foreground transition-colors hover:bg-neutral-100 hover:text-foreground"
+                    style={{ width: 30, height: 30, cursor: 'pointer' }}
                   >
-                    <X size={14} />
+                    <X size={14} strokeWidth={2} />
                   </button>
                 </div>
                 <div style={{ flex: 1, overflowY: 'auto', padding: '24px 28px', display: 'flex', flexDirection: 'column', gap: 24 }}>
@@ -1089,6 +1020,7 @@ function EmbeddedMiniChat({
   setMessages: setMessagesProp,
   inputValue: inputValueProp,
   setInputValue: setInputValueProp,
+  chatTitle = COLLAPSE_DRAWER_HISTORY[0].title,
 }: {
   person: Person
   onOpenFullscreen?: (options?: { initialQuery?: string }) => void
@@ -1104,6 +1036,8 @@ function EmbeddedMiniChat({
   setMessages?: Dispatch<SetStateAction<MiniChatMsg[]>>
   inputValue?: string
   setInputValue?: Dispatch<SetStateAction<string>>
+  /** Thread title in header — matches main chat history mock. */
+  chatTitle?: string
 }) {
   const [intM, setIntM] = useState<MiniChatMsg[]>([])
   const [intI, setIntI] = useState('')
@@ -1163,7 +1097,7 @@ function EmbeddedMiniChat({
         }}
       >
         <Sparkles size={12} style={{ color: '#555' }} />
-        <span style={{ fontSize: 12, fontWeight: 600, color: '#333' }}>Rippling AI</span>
+        <span style={{ fontSize: 12, fontWeight: 600, color: '#333', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{chatTitle}</span>
         <span style={{ fontSize: 12, color: '#aaa', flex: 1 }}>· Ask about this record</span>
         {expandVisible && (
           <button
@@ -1292,7 +1226,7 @@ function StatCard({
         <span className="text-sm text-muted-foreground">{pct}%</span>
       </div>
 
-      {sub && <p className="text-xs text-muted-foreground -mt-1">{sub}</p>}
+      {sub && <p className="text-xs font-normal text-muted-foreground -mt-1">{sub}</p>}
     </div>
   )
 }
@@ -1315,7 +1249,7 @@ function ColumnHead({
           <p className={['text-xs font-semibold', active ? 'text-neutral-600' : 'text-neutral-500'].join(' ')}>
             {label}
           </p>
-          {subtitle && <p className="text-[10px] text-neutral-400 font-medium">{subtitle}</p>}
+          {subtitle && <p className="text-[10px] text-neutral-400 font-normal">{subtitle}</p>}
         </div>
         {sortable && (
           <ArrowUpDown size={11} className={active ? 'text-neutral-500' : 'text-neutral-300'} />

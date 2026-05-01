@@ -346,7 +346,7 @@ export const StepperPage = memo(function StepperPage() {
               <h2 style={{ fontSize: 22, fontWeight: 700, margin: '0 0 4px', color: '#111', letterSpacing: '-0.3px' }}>
                 {content.title}
               </h2>
-              <p style={{ fontSize: 14, color: '#888', margin: '0 0 32px' }}>
+              <p style={{ fontSize: 14, fontWeight: 400, color: '#888', margin: '0 0 32px' }}>
                 {content.subtitle}
               </p>
 

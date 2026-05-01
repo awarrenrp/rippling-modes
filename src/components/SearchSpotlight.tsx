@@ -183,7 +183,7 @@ export function SearchSpotlight({ isOpen, onClose }: SearchSpotlightProps) {
                             {item.label}
                           </div>
                           {item.sub && (
-                            <div style={{ fontSize: 11, color: '#aaa', marginTop: 1 }}>
+                            <div style={{ fontSize: 11, fontWeight: 400, color: '#aaa', marginTop: 1 }}>
                               {item.sub}
                             </div>
                           )}

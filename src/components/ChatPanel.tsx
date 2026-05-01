@@ -1,9 +1,22 @@
-import React, { useState, useRef, useEffect } from 'react'
+import React, { useState, useRef, useEffect, useLayoutEffect, useCallback } from 'react'
 import { motion, AnimatePresence } from 'motion/react'
 import { Icon } from './Icon'
 import { AIComposerInput } from './AIComposerInput'
 import { useContainerWidth } from '../hooks/useContainerWidth'
 import type { Mode } from './ModeBar'
+import {
+  ChartArtifactByPreset,
+  CHART_ARTIFACT_PRESETS,
+  chartPresetTitle,
+  filterChartPresets,
+  inferChartPresetIdsFromMessage,
+  type ChartArtifactPresetId,
+} from './chat-artifacts/chartArtifacts'
+import { inferWorkflowIntent, WorkflowPreviewArtifact } from './chat-artifacts/workflowArtifacts'
+import { inferScheduleIntent, SchedulePreviewArtifact } from './chat-artifacts/scheduleArtifacts'
+import { WorkflowCanvasView, WORKFLOW_CANVAS_DISPLAY_NAME } from './WorkflowCanvasView'
+import { ScheduleCanvasView, SCHEDULE_CANVAS_DISPLAY_NAME } from './ScheduleCanvasView'
+import { ReportBuilderEditMode, REPORT_BUILDER_DISPLAY_NAME, REPORT_BUILDER_HEADER_HEIGHT_PX } from './ReportBuilderEditMode'
 
 // ─── Types ──────────────────────────────────────────────────────────────────
 
@@ -18,8 +31,7 @@ interface ChartMessage {
   id: number
   role: 'assistant'
   type: 'chart'
-  title: string
-  data: { label: string; value: number; color: string }[]
+  presetId: ChartArtifactPresetId
 }
 
 interface ArtifactMessage {
@@ -35,60 +47,150 @@ interface ReportCreatedMessage {
   title: string
 }
 
-type Message = TextMessage | ChartMessage | ArtifactMessage | ReportCreatedMessage
+interface WorkflowPreviewMessage {
+  id: number
+  role: 'assistant'
+  type: 'workflow-preview'
+}
 
-// ─── Chart card ─────────────────────────────────────────────────────────────
+interface SchedulePreviewMessage {
+  id: number
+  role: 'assistant'
+  type: 'schedule-preview'
+}
 
-const CHART_DATA = [
-  { label: 'Eng',   value: 312, color: '#444' },
-  { label: 'Sales', value: 198, color: '#666' },
-  { label: 'Ops',   value: 247, color: '#555' },
-  { label: 'Mktg',  value: 134, color: '#777' },
-  { label: 'HR',    value: 89,  color: '#888' },
-  { label: 'Fin',   value: 102, color: '#999' },
-]
+/** Clickable Figma / resource link row — matches AI-components link attachment pattern (e.g. Figma node 427:103803). */
+interface FigmaLinkCardMessage {
+  id: number
+  role: 'assistant'
+  type: 'figma-link-card'
+  url: string
+  title: string
+  subtitle: string
+}
 
-function ChartCard({ data, title }: Pick<ChartMessage, 'data' | 'title'>) {
-  const max = Math.max(...data.map((d) => d.value))
+type Message =
+  | TextMessage
+  | ChartMessage
+  | ArtifactMessage
+  | ReportCreatedMessage
+  | WorkflowPreviewMessage
+  | SchedulePreviewMessage
+  | FigmaLinkCardMessage
 
-  return (
-    <div style={{ border: '1px solid var(--grey-200)', borderRadius: 10, overflow: 'hidden', width: '100%', boxShadow: '0 1px 2px 0 rgba(0,0,0,0.10)' }}>
-      {/* Chart section — grey-100 */}
-      <div style={{ background: 'var(--grey-100)', padding: '12px 14px' }}>
-        <div style={{ fontSize: 11, fontWeight: 500, color: '#333', marginBottom: 10 }}>{title}</div>
-        <div style={{ display: 'flex', alignItems: 'flex-end', gap: 5, height: 70 }}>
-          {data.map((d, i) => (
-            <div key={d.label} style={{ flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 3, height: '100%', justifyContent: 'flex-end' }}>
-              <motion.div
-                initial={{ scaleY: 0 }}
-                animate={{ scaleY: 1 }}
-                transition={{ delay: i * 0.07, type: 'spring', stiffness: 300, damping: 24 }}
-                style={{
-                  width: '100%',
-                  height: `${(d.value / max) * 56}px`,
-                  background: d.color,
-                  borderRadius: '2px 2px 0 0',
-                  transformOrigin: 'bottom',
-                  opacity: 0.6 + i * 0.05,
-                }}
-              />
-              <span style={{ fontSize: 8, color: '#bbb' }}>{d.label}</span>
-            </div>
-          ))}
-        </div>
-      </div>
-      {/* Summary footer — white */}
-      <div style={{
-        background: '#ffffff', borderTop: '1px solid var(--grey-200)',
-        padding: '8px 14px',
-        display: 'flex', justifyContent: 'space-between',
-        fontSize: 10, color: '#aaa',
-      }}>
-        <span>Total: <strong style={{ color: '#333' }}>1,082</strong></span>
-        <span style={{ color: '#555' }}>↑ 8.4% YoY</span>
-      </div>
-    </div>
-  )
+const STUB_ASSISTANT_THINKING =
+  "I'm looking into that for you. Give me a moment to pull the latest data from your Rippling workspace..."
+
+/** Prototype reply when the user asks for the AI-components / Figma design link. */
+const FIGMA_AI_COMPONENTS_URL =
+  'https://www.figma.com/design/Dvcv5Yj50PM2WuJhPj1qUH/AI-components?node-id=427-103803&t=fPVemq2P5aA9CFgw-1'
+
+function inferAiComponentsFigmaLinkIntent(userText: string): boolean {
+  const raw = userText.trim()
+  const t = raw.toLowerCase()
+  if (!t) return false
+  const asksLink =
+    /\b(links?|url|href)\b/.test(t) || /^\s*link\s*[?.!]*\s*$/i.test(raw)
+  if (!asksLink) return false
+  if (/\bfigma\b/.test(t)) return true
+  if (/ai[\s-]?components?/.test(t)) return true
+  if (/(show|give|send|share|get).{0,60}\b(links?|url)\b/.test(t)) return true
+  if (/^(please\s+)?(the\s+)?(links?|url)\s*[?.!]*$/i.test(raw)) return true
+  return false
+}
+
+/**
+ * Assistant follow-up after user text: chart intro + artifacts when `@chart:` or NLP
+ * matches a preset; otherwise the generic “pulling data” stub. Used by `sendMessage`
+ * and by the `initialQuery` bootstrap (which previously always sent the stub).
+ */
+function assistantMessagesAfterUserText(userText: string, idBase: number): Message[] {
+  if (inferAiComponentsFigmaLinkIntent(userText)) {
+    return [
+      {
+        id: idBase,
+        role: 'assistant',
+        type: 'text',
+        text: "Here's the AI components file in Figma:",
+      } satisfies TextMessage,
+      {
+        id: idBase + 1,
+        role: 'assistant',
+        type: 'figma-link-card',
+        url: FIGMA_AI_COMPONENTS_URL,
+        title: 'AI components',
+        subtitle: 'Figma · Design file',
+      } satisfies FigmaLinkCardMessage,
+    ]
+  }
+  if (inferScheduleIntent(userText)) {
+    const intro: TextMessage = {
+      id: idBase,
+      role: 'assistant',
+      type: 'text',
+      text: "Here's your schedule draft. Click the card to open the WIW canvas beside chat.",
+    }
+    const preview: SchedulePreviewMessage = {
+      id: idBase + 1,
+      role: 'assistant',
+      type: 'schedule-preview',
+    }
+    return [intro, preview]
+  }
+  if (inferWorkflowIntent(userText)) {
+    const intro: TextMessage = {
+      id: idBase,
+      role: 'assistant',
+      type: 'text',
+      text: "Here's a workflow preview. Click the card to open the canvas beside chat in full screen.",
+    }
+    const preview: WorkflowPreviewMessage = {
+      id: idBase + 1,
+      role: 'assistant',
+      type: 'workflow-preview',
+    }
+    return [intro, preview]
+  }
+
+  const tokenRe = /@chart:([\w-]+)/g
+  const fromToken: ChartArtifactPresetId[] = []
+  let m: RegExpExecArray | null
+  const validIds = new Set(CHART_ARTIFACT_PRESETS.map((p) => p.id))
+  while ((m = tokenRe.exec(userText)) !== null) {
+    if (validIds.has(m[1] as ChartArtifactPresetId)) fromToken.push(m[1] as ChartArtifactPresetId)
+  }
+  const fromNlp = inferChartPresetIdsFromMessage(userText)
+  const seen = new Set<ChartArtifactPresetId>()
+  const ids: ChartArtifactPresetId[] = []
+  for (const id of [...fromToken, ...fromNlp]) {
+    if (seen.has(id)) continue
+    seen.add(id)
+    ids.push(id)
+    if (ids.length >= 5) break
+  }
+  if (ids.length === 0) {
+    return [{ id: idBase, role: 'assistant', type: 'text', text: STUB_ASSISTANT_THINKING } satisfies TextMessage]
+  }
+  const nlpOnly = fromToken.length === 0 && fromNlp.length > 0
+  const intro: TextMessage = {
+    id: idBase,
+    role: 'assistant',
+    type: 'text',
+    text: nlpOnly
+      ? ids.length === 1
+        ? "Here's an example of that chart type (Rippling AI components style)."
+        : "Here are examples of those chart types (Rippling AI components style)."
+      : ids.length === 1
+        ? "Here's the chart from your workspace."
+        : `Here are the ${ids.length} charts you asked for.`,
+  }
+  const charts: ChartMessage[] = ids.map((presetId, i) => ({
+    id: idBase + 1 + i,
+    role: 'assistant',
+    type: 'chart',
+    presetId,
+  }))
+  return [intro, ...charts]
 }
 
 // ─── Artifact: 3-column table (Leave Requests) ───────────────────────────────
@@ -122,16 +224,16 @@ function TableSmallArtifact({ cw }: { cw: number }) {
           <thead>
             <tr style={{ background: 'var(--grey-200)' }}>
               {['Employee', 'Type', 'Days', ...(wide ? ['Status', 'Starts'] : ['Status'])].map((h) => (
-                <th key={h} style={{ padding: wide ? '7px 12px' : '6px 8px', textAlign: 'left', fontWeight: 600, color: '#555', borderBottom: '1px solid var(--grey-200)', whiteSpace: 'nowrap' }}>{h}</th>
+                <th key={h} style={{ padding: wide ? '7px 12px' : '6px 8px', textAlign: 'left', fontWeight: 400, fontFamily: 'var(--font-heading)', color: '#555', borderBottom: '1px solid var(--grey-200)', whiteSpace: 'nowrap' }}>{h}</th>
               ))}
             </tr>
           </thead>
           <tbody>
             {LEAVE_ROWS.map((r, i) => (
               <tr key={r.name} style={{ background: '#ffffff', borderBottom: i < LEAVE_ROWS.length - 1 ? '1px solid var(--grey-200)' : 'none' }}>
-                <td style={{ padding: wide ? '8px 12px' : '6px 8px', fontWeight: 500, color: '#111', whiteSpace: 'nowrap' }}>
+                <td style={{ padding: wide ? '8px 12px' : '6px 8px', fontWeight: 400, color: '#111', whiteSpace: 'nowrap' }}>
                   <div style={{ display: 'flex', alignItems: 'center', gap: 7 }}>
-                    <div style={{ width: wide ? 24 : 20, height: wide ? 24 : 20, borderRadius: '50%', background: 'var(--grey-200)', color: '#555', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 9, fontWeight: 700, flexShrink: 0 }}>
+                    <div style={{ width: wide ? 24 : 20, height: wide ? 24 : 20, borderRadius: '50%', background: 'var(--grey-200)', color: '#555', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 9, fontWeight: 400, flexShrink: 0 }}>
                       {r.name.split(' ').map(n => n[0]).join('')}
                     </div>
                     <span style={{ fontSize: wide ? 13 : 11.5, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', maxWidth: wide ? 120 : 80 }}>{r.name}</span>
@@ -140,10 +242,10 @@ function TableSmallArtifact({ cw }: { cw: number }) {
                 <td style={{ padding: wide ? '8px 12px' : '6px 8px', color: '#555' }}>{r.type}</td>
                 <td style={{ padding: wide ? '8px 12px' : '6px 8px', color: '#555', textAlign: 'center' }}>{r.days}d</td>
                 {wide && <td style={{ padding: '8px 12px' }}>
-                  <span style={{ background: STATUS_COLOR[r.status], color: STATUS_TEXT[r.status], fontSize: 11, fontWeight: 500, borderRadius: 99, padding: '2px 8px' }}>{r.status}</span>
+                  <span style={{ background: STATUS_COLOR[r.status], color: STATUS_TEXT[r.status], fontSize: 11, fontWeight: 400, borderRadius: 99, padding: '2px 8px' }}>{r.status}</span>
                 </td>}
                 {!wide && <td style={{ padding: '6px 8px' }}>
-                  <span style={{ background: STATUS_COLOR[r.status], color: STATUS_TEXT[r.status], fontSize: 10, fontWeight: 500, borderRadius: 99, padding: '2px 6px' }}>{r.status}</span>
+                  <span style={{ background: STATUS_COLOR[r.status], color: STATUS_TEXT[r.status], fontSize: 10, fontWeight: 400, borderRadius: 99, padding: '2px 6px' }}>{r.status}</span>
                 </td>}
                 {wide && <td style={{ padding: '8px 12px', color: '#999', fontSize: 12 }}>{r.start}</td>}
               </tr>
@@ -180,7 +282,7 @@ function TableLargeArtifact({ cw }: { cw: number }) {
           <thead>
             <tr style={{ background: 'var(--grey-200)' }}>
               {visibleCols.map((h) => (
-                <th key={h} style={{ padding: wide ? '6px 10px' : '5px 8px', textAlign: 'left', fontWeight: 600, color: '#555', borderBottom: '1px solid var(--grey-200)', whiteSpace: 'nowrap', fontSize: wide ? 11 : 10 }}>{h}</th>
+                <th key={h} style={{ padding: wide ? '6px 10px' : '5px 8px', textAlign: 'left', fontWeight: 400, fontFamily: 'var(--font-heading)', color: '#555', borderBottom: '1px solid var(--grey-200)', whiteSpace: 'nowrap', fontSize: wide ? 11 : 10 }}>{h}</th>
               ))}
             </tr>
           </thead>
@@ -193,13 +295,13 @@ function TableLargeArtifact({ cw }: { cw: number }) {
                     style={{
                       padding: wide ? '7px 10px' : '5px 8px',
                       color: j === 0 ? '#111' : '#666',
-                      fontWeight: j === 0 ? 500 : 400,
+                      fontWeight: 400,
                       whiteSpace: 'nowrap',
                       fontSize: wide ? 12 : 11,
                     }}
                   >
                     {j === 6 && typeof cell === 'string' ? (
-                      <span style={{ background: cell === 'Processed' ? '#d4edda' : 'var(--grey-200)', color: cell === 'Processed' ? '#2d6a4f' : '#888', fontSize: 10, borderRadius: 99, padding: '2px 7px', fontWeight: 500 }}>{cell}</span>
+                      <span style={{ background: cell === 'Processed' ? '#d4edda' : 'var(--grey-200)', color: cell === 'Processed' ? '#2d6a4f' : '#888', fontSize: 10, borderRadius: 99, padding: '2px 7px', fontWeight: 400 }}>{cell}</span>
                     ) : cell}
                   </td>
                 ))}
@@ -246,15 +348,15 @@ function DashboardArtifact({ cw }: { cw: number }) {
         <div style={{ display: 'grid', gridTemplateColumns: `repeat(${cols}, 1fr)`, gap: wide ? 10 : 8, marginBottom: cw > 320 ? 14 : 0 }}>
           {DASH_STATS.map((s) => (
             <div key={s.label} style={{ background: '#ffffff', border: '1px solid var(--grey-200)', borderRadius: 8, padding: wide ? '10px 12px' : '8px 10px' }}>
-              <div style={{ fontSize: 10, fontWeight: 600, color: '#aaa', textTransform: 'uppercase', letterSpacing: '0.5px', marginBottom: 4 }}>{s.label}</div>
-              <div style={{ fontSize: wide ? 22 : 18, fontWeight: 700, color: '#111', lineHeight: 1 }}>{s.value}</div>
-              <div style={{ fontSize: 10.5, color: s.bad ? '#c0392b' : '#27ae60', marginTop: 3, fontWeight: 500 }}>{s.delta} this quarter</div>
+              <div style={{ fontSize: 10, fontWeight: 400, color: '#aaa', textTransform: 'uppercase', letterSpacing: '0.5px', marginBottom: 4 }}>{s.label}</div>
+              <div style={{ fontSize: wide ? 22 : 18, fontWeight: 400, color: '#111', lineHeight: 1 }}>{s.value}</div>
+              <div style={{ fontSize: 10.5, color: s.bad ? '#c0392b' : '#27ae60', marginTop: 3, fontWeight: 400 }}>{s.delta} this quarter</div>
             </div>
           ))}
         </div>
         {cw > 320 && (
           <div>
-            <div style={{ fontSize: 10.5, fontWeight: 600, color: '#aaa', textTransform: 'uppercase', letterSpacing: '0.5px', marginBottom: 8 }}>By Department</div>
+            <div style={{ fontSize: 10.5, fontWeight: 400, color: '#aaa', textTransform: 'uppercase', letterSpacing: '0.5px', marginBottom: 8 }}>By Department</div>
             <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
               {DASH_DEPT.map((d) => (
                 <div key={d.name} style={{ display: 'flex', alignItems: 'center', gap: wide ? 10 : 8 }}>
@@ -293,10 +395,10 @@ function CandidateProfileArtifact({ cw }: { cw: number }) {
           width: 38, height: 38, borderRadius: '50%', flexShrink: 0,
           background: 'linear-gradient(135deg, #d0d0d0, #b0b0b0)',
           display: 'flex', alignItems: 'center', justifyContent: 'center',
-          fontSize: 13, fontWeight: 700, color: '#555',
+          fontSize: 13, fontWeight: 400, color: '#555',
         }}>SR</div>
         <div style={{ flex: 1, minWidth: 0 }}>
-          <div style={{ fontSize: 13.5, fontWeight: 600, color: '#111' }}>Sofia Rodriguez</div>
+          <div style={{ fontSize: 13.5, fontWeight: 600, fontFamily: 'var(--font-heading)', color: '#111' }}>Sofia Rodriguez</div>
           <div style={{ fontSize: 11.5, color: '#888', marginTop: 1 }}>Senior Designer · San Francisco, CA</div>
         </div>
         <span style={{ fontSize: 10.5, color: '#bbb', flexShrink: 0 }}>Applied Apr 8</span>
@@ -307,32 +409,32 @@ function CandidateProfileArtifact({ cw }: { cw: number }) {
         {/* Match score */}
         <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
           <div style={{ flex: 1 }}>
-            <div style={{ fontSize: 10, fontWeight: 600, color: '#aaa', textTransform: 'uppercase', letterSpacing: '0.5px', marginBottom: 4 }}>Match Score</div>
+            <div style={{ fontSize: 10, fontWeight: 400, color: '#aaa', textTransform: 'uppercase', letterSpacing: '0.5px', marginBottom: 4 }}>Match Score</div>
             <div style={{ height: 6, background: 'var(--grey-300)', borderRadius: 3, overflow: 'hidden' }}>
               <motion.div initial={{ width: 0 }} animate={{ width: '87%' }} transition={{ duration: 0.9, ease: 'easeOut' }} style={{ height: '100%', background: '#333', borderRadius: 3 }} />
             </div>
           </div>
-          <span style={{ fontSize: 16, fontWeight: 700, color: '#111', flexShrink: 0 }}>87%</span>
+          <span style={{ fontSize: 16, fontWeight: 400, color: '#111', flexShrink: 0 }}>87%</span>
         </div>
 
         {/* Skills */}
         <div>
-          <div style={{ fontSize: 10, fontWeight: 600, color: '#aaa', textTransform: 'uppercase', letterSpacing: '0.5px', marginBottom: 6 }}>Skills</div>
+          <div style={{ fontSize: 10, fontWeight: 400, color: '#aaa', textTransform: 'uppercase', letterSpacing: '0.5px', marginBottom: 6 }}>Skills</div>
           <div style={{ display: 'flex', flexWrap: 'wrap', gap: 5 }}>
             {SKILLS.map((s) => (
-              <span key={s} style={{ fontSize: 11, background: '#ffffff', border: '1px solid var(--grey-200)', color: '#555', borderRadius: 5, padding: '3px 8px', fontWeight: 500 }}>{s}</span>
+              <span key={s} style={{ fontSize: 11, background: '#ffffff', border: '1px solid var(--grey-200)', color: '#555', borderRadius: 5, padding: '3px 8px', fontWeight: 400 }}>{s}</span>
             ))}
           </div>
         </div>
 
         {/* Experience */}
         <div>
-          <div style={{ fontSize: 10, fontWeight: 600, color: '#aaa', textTransform: 'uppercase', letterSpacing: '0.5px', marginBottom: 6 }}>Experience</div>
+          <div style={{ fontSize: 10, fontWeight: 400, color: '#aaa', textTransform: 'uppercase', letterSpacing: '0.5px', marginBottom: 6 }}>Experience</div>
           <div style={{ display: 'flex', flexDirection: 'column', gap: 5 }}>
             {(wide ? EXPERIENCE : EXPERIENCE.slice(0, 2)).map((e) => (
               <div key={e.company} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', gap: 8 }}>
                 <div>
-                  <span style={{ fontSize: 12, fontWeight: 500, color: '#222' }}>{e.role}</span>
+                  <span style={{ fontSize: 12, fontWeight: 400, color: '#222' }}>{e.role}</span>
                   <span style={{ fontSize: 11, color: '#aaa' }}> · {e.company}</span>
                 </div>
                 <span style={{ fontSize: 10.5, color: '#bbb', flexShrink: 0 }}>{e.period}</span>
@@ -382,8 +484,8 @@ function ExpenseArtifact({ cw }: { cw: number }) {
         }}>
           <Icon name="receipt" size={wide ? 28 : 22} style={{ color: '#ccc' }} />
           <div style={{ textAlign: wide ? 'center' : 'left' }}>
-            <div style={{ fontSize: 10, color: '#bbb', fontWeight: 500 }}>Total</div>
-            <div style={{ fontSize: wide ? 17 : 15, fontWeight: 700, color: '#333' }}>{total}</div>
+            <div style={{ fontSize: 10, color: '#bbb', fontWeight: 400 }}>Total</div>
+            <div style={{ fontSize: wide ? 17 : 15, fontWeight: 400, color: '#333' }}>{total}</div>
             <div style={{ fontSize: 10, color: '#ccc', marginTop: 1 }}>USD · Mar 28</div>
           </div>
         </div>
@@ -393,10 +495,10 @@ function ExpenseArtifact({ cw }: { cw: number }) {
           {EXPENSE_ITEMS.map((item, i) => (
             <div key={i} style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '6px 0', borderBottom: i < EXPENSE_ITEMS.length - 1 ? '1px solid var(--grey-200)' : 'none', gap: 8 }}>
               <div style={{ flex: 1, minWidth: 0 }}>
-                <div style={{ fontSize: 12, fontWeight: 500, color: '#222', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{item.desc}</div>
-                <span style={{ fontSize: 10, background: 'var(--grey-200)', color: '#777', borderRadius: 4, padding: '1px 6px', fontWeight: 500 }}>{item.category}</span>
+                <div style={{ fontSize: 12, fontWeight: 400, color: '#222', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{item.desc}</div>
+                <span style={{ fontSize: 10, background: 'var(--grey-200)', color: '#777', borderRadius: 4, padding: '1px 6px', fontWeight: 400 }}>{item.category}</span>
               </div>
-              <span style={{ fontSize: 12.5, fontWeight: 600, color: '#333', flexShrink: 0 }}>{item.amt}</span>
+              <span style={{ fontSize: 12.5, fontWeight: 400, color: '#333', flexShrink: 0 }}>{item.amt}</span>
             </div>
           ))}
         </div>
@@ -405,8 +507,8 @@ function ExpenseArtifact({ cw }: { cw: number }) {
       {/* Total + actions — white */}
       <div style={{ background: '#ffffff', borderTop: '1px solid var(--grey-200)', padding: '10px 14px' }}>
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 10 }}>
-          <span style={{ fontSize: 11, fontWeight: 600, color: '#555' }}>Total</span>
-          <span style={{ fontSize: 14, fontWeight: 700, color: '#111' }}>{total}</span>
+          <span style={{ fontSize: 11, fontWeight: 400, color: '#555' }}>Total</span>
+          <span style={{ fontSize: 14, fontWeight: 400, color: '#111' }}>{total}</span>
         </div>
         <div style={{ display: 'flex', gap: 6 }}>
           <ActionPill label="Approve" primary />
@@ -435,12 +537,12 @@ function ArtifactShell({
         {icon && <Icon name={icon} size={14} style={{ color: '#888', flexShrink: 0 }} />}
         <div style={{ flex: 1, minWidth: 0 }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-            <span style={{ fontSize: 12.5, fontWeight: 600, color: '#222' }}>{title}</span>
+            <span style={{ fontSize: 12.5, fontWeight: 600, fontFamily: 'var(--font-heading)', color: '#222' }}>{title}</span>
             {badge && (
-              <span style={{ fontSize: 10, background: 'var(--grey-300)', color: '#666', borderRadius: 99, padding: '1px 6px', fontWeight: 500 }}>{badge}</span>
+              <span style={{ fontSize: 10, background: 'var(--grey-300)', color: '#666', borderRadius: 99, padding: '1px 6px', fontWeight: 400 }}>{badge}</span>
             )}
           </div>
-          {subtitle && <div style={{ fontSize: 10.5, color: '#aaa', marginTop: 1 }}>{subtitle}</div>}
+          {subtitle && <div style={{ fontSize: 10.5, fontWeight: 400, color: '#aaa', marginTop: 1 }}>{subtitle}</div>}
         </div>
       </div>
       {/* Content — grey-50 */}
@@ -456,7 +558,7 @@ function ArtifactShell({
 function ActionPill({ label, primary = false }: { label: string; primary?: boolean }) {
   return (
     <button style={{
-      fontSize: 11.5, fontWeight: 500, padding: '5px 11px', borderRadius: 6, cursor: 'pointer',
+      fontSize: 11.5, fontWeight: 400, padding: '5px 11px', borderRadius: 6, cursor: 'pointer',
       border: primary ? 'none' : '1px solid #e0e0e0',
       background: primary ? '#222' : '#fff',
       color: primary ? '#fff' : '#555',
@@ -469,6 +571,126 @@ function ActionPill({ label, primary = false }: { label: string; primary?: boole
 
 // ─── Report Created Card ─────────────────────────────────────────────────────
 
+/** Rich link preview for Figma URLs — primary action can open app shell schedule split; optional row opens Figma. */
+function FigmaLinkAttachmentCard({
+  url,
+  title,
+  subtitle,
+  aiCompDocked,
+  onOpenShellSplit,
+}: {
+  url: string
+  title: string
+  subtitle: string
+  aiCompDocked: boolean
+  onOpenShellSplit?: () => void
+}) {
+  const ink = aiCompDocked ? AI_COMP_DOCKED.ink : '#111'
+  const muted = aiCompDocked ? AI_COMP_DOCKED.muted : '#737373'
+  const border = aiCompDocked ? '#e8e6e3' : 'var(--grey-200)'
+  const borderHover = aiCompDocked ? '#d4d0cc' : 'var(--grey-300)'
+  const cardStyle: React.CSSProperties = {
+    display: 'flex',
+    alignItems: 'center',
+    gap: 12,
+    padding: '12px 14px',
+    borderRadius: 10,
+    border: `1px solid ${border}`,
+    background: '#ffffff',
+    boxShadow: '0 1px 3px rgba(0,0,0,0.06)',
+    maxWidth: 400,
+    width: '100%',
+    textDecoration: 'none',
+    color: 'inherit',
+    transition: 'box-shadow 0.15s ease, border-color 0.15s ease',
+    cursor: onOpenShellSplit ? 'pointer' : undefined,
+    fontFamily: 'inherit',
+    textAlign: 'left',
+    boxSizing: 'border-box',
+  }
+  const rowInner = (trailingIcon: 'chevron_right' | 'open_in_new') => (
+    <>
+      <div
+        aria-hidden
+        style={{
+          width: 40,
+          height: 40,
+          borderRadius: 8,
+          flexShrink: 0,
+          background: 'linear-gradient(135deg, #f24e1e 0%, #ff7262 38%, #a259ff 72%, #1abcfe 100%)',
+        }}
+      />
+      <div style={{ flex: 1, minWidth: 0 }}>
+        <div
+          style={{
+            fontSize: 14,
+            fontWeight: 600,
+            fontFamily: 'var(--font-sans)',
+            color: ink,
+            lineHeight: 1.35,
+          }}
+        >
+          {title}
+        </div>
+        <div style={{ fontSize: 12, fontWeight: 400, color: muted, marginTop: 2, lineHeight: 1.35 }}>{subtitle}</div>
+      </div>
+      <Icon
+        name={trailingIcon}
+        size={trailingIcon === 'chevron_right' ? 20 : 18}
+        style={{ color: muted, flexShrink: 0 }}
+        aria-hidden
+      />
+    </>
+  )
+  const hoverCard = (el: HTMLElement, enter: boolean) => {
+    el.style.boxShadow = enter ? '0 4px 14px rgba(0,0,0,0.08)' : '0 1px 3px rgba(0,0,0,0.06)'
+    el.style.borderColor = enter ? borderHover : border
+  }
+
+  if (onOpenShellSplit) {
+    return (
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 8, maxWidth: 400, width: '100%' }}>
+        <button
+          type="button"
+          onClick={onOpenShellSplit}
+          title="Open schedule beside chat"
+          style={{ ...cardStyle, margin: 0 }}
+          onMouseEnter={(e) => hoverCard(e.currentTarget, true)}
+          onMouseLeave={(e) => hoverCard(e.currentTarget, false)}
+        >
+          {rowInner('chevron_right')}
+        </button>
+        <a
+          href={url}
+          target="_blank"
+          rel="noopener noreferrer"
+          style={{
+            fontSize: 12,
+            fontWeight: 400,
+            color: muted,
+            alignSelf: 'flex-start',
+          }}
+        >
+          Open in Figma
+        </a>
+      </div>
+    )
+  }
+
+  return (
+    <a
+      href={url}
+      target="_blank"
+      rel="noopener noreferrer"
+      style={cardStyle}
+      onMouseEnter={(e) => hoverCard(e.currentTarget, true)}
+      onMouseLeave={(e) => hoverCard(e.currentTarget, false)}
+    >
+      {rowInner('open_in_new')}
+    </a>
+  )
+}
+
 function ReportCreatedCard({ title, onOpen }: { title: string; onOpen: () => void }) {
   return (
     <div style={{
@@ -479,10 +701,10 @@ function ReportCreatedCard({ title, onOpen }: { title: string; onOpen: () => voi
     }}>
       {/* Left: action info */}
       <div style={{ flex: 1, padding: '14px 16px', display: 'flex', flexDirection: 'column', gap: 10 }}>
-        <div style={{ fontSize: 14, fontWeight: 500, color: '#111', lineHeight: 1.4 }}>
+        <div style={{ fontSize: 14, fontWeight: 600, fontFamily: 'var(--font-heading)', color: '#111', lineHeight: 1.4 }}>
           Created new report
         </div>
-        <div style={{ fontSize: 12, color: '#888' }}>{title}</div>
+        <div style={{ fontSize: 12, fontWeight: 400, color: '#888' }}>{title}</div>
         <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
           <button
             onClick={onOpen}
@@ -490,7 +712,7 @@ function ReportCreatedCard({ title, onOpen }: { title: string; onOpen: () => voi
               padding: '5px 12px', borderRadius: 6,
               border: '1px solid var(--grey-300)',
               background: '#fff', color: '#222',
-              fontSize: 12.5, fontWeight: 500,
+              fontSize: 12.5, fontWeight: 400,
               cursor: 'pointer', fontFamily: 'inherit',
             }}
           >
@@ -526,7 +748,7 @@ function ReportCreatedCard({ title, onOpen }: { title: string; onOpen: () => voi
             }} />
           ))}
         </div>
-        <div style={{ fontSize: 9, color: '#bbb', fontWeight: 500, textAlign: 'center', lineHeight: 1.3 }}>
+        <div style={{ fontSize: 9, color: '#bbb', fontWeight: 400, textAlign: 'center', lineHeight: 1.3 }}>
           Report
         </div>
       </div>
@@ -550,13 +772,13 @@ export function ReportPanelContent() {
     <div style={{ display: 'flex', flexDirection: 'column', height: '100%', overflow: 'auto' }}>
       {/* Page header */}
       <div style={{ padding: '28px 32px 16px', borderBottom: '1px solid var(--grey-200)' }}>
-        <div style={{ fontSize: 11, color: '#bbb', fontWeight: 500, letterSpacing: '0.5px', textTransform: 'uppercase', marginBottom: 6 }}>
+        <div style={{ fontSize: 11, color: '#bbb', fontWeight: 400, letterSpacing: '0.5px', textTransform: 'uppercase', marginBottom: 6 }}>
           Q1 2026
         </div>
-        <div style={{ fontSize: 22, fontWeight: 600, color: '#111', marginBottom: 4 }}>
+        <div style={{ fontSize: 22, fontWeight: 600, fontFamily: 'var(--font-heading)', color: '#111', marginBottom: 4 }}>
           Payroll Summary Report
         </div>
-        <div style={{ fontSize: 12, color: '#999' }}>
+        <div style={{ fontSize: 12, fontWeight: 400, color: '#999' }}>
           Generated by Rippling AI · Apr 20, 2026
         </div>
       </div>
@@ -573,8 +795,8 @@ export function ReportPanelContent() {
             flex: 1, padding: '10px 16px',
             borderLeft: i > 0 ? '1px solid var(--grey-200)' : 'none',
           }}>
-            <div style={{ fontSize: 18, fontWeight: 600, color: '#111' }}>{s.value}</div>
-            <div style={{ fontSize: 11, color: '#aaa', marginTop: 2 }}>{s.label}</div>
+            <div style={{ fontSize: 18, fontWeight: 400, fontFamily: 'var(--font-heading)', color: '#111' }}>{s.value}</div>
+            <div style={{ fontSize: 11, fontWeight: 400, color: '#aaa', marginTop: 2 }}>{s.label}</div>
           </div>
         ))}
       </div>
@@ -585,19 +807,19 @@ export function ReportPanelContent() {
           <thead>
             <tr style={{ borderBottom: '1px solid var(--grey-200)' }}>
               {['Department', 'Headcount', 'Base Salary', 'Bonuses', 'Total Cost', 'QoQ'].map((h) => (
-                <th key={h} style={{ padding: '8px 12px', textAlign: 'left', fontSize: 11, fontWeight: 600, color: '#888', textTransform: 'uppercase', letterSpacing: '0.4px' }}>{h}</th>
+                <th key={h} style={{ padding: '8px 12px', textAlign: 'left', fontSize: 11, fontWeight: 400, fontFamily: 'var(--font-heading)', color: '#888', textTransform: 'uppercase', letterSpacing: '0.4px' }}>{h}</th>
               ))}
             </tr>
           </thead>
           <tbody>
             {REPORT_ROWS.map((row, i) => (
               <tr key={row.name} style={{ borderBottom: '1px solid var(--grey-100)', background: i % 2 === 0 ? 'transparent' : 'var(--grey-50)' }}>
-                <td style={{ padding: '10px 12px', fontWeight: 500, color: '#222' }}>{row.name}</td>
-                <td style={{ padding: '10px 12px', color: '#555' }}>{row.hc}</td>
-                <td style={{ padding: '10px 12px', color: '#555' }}>{row.salary}</td>
-                <td style={{ padding: '10px 12px', color: '#555' }}>{row.bonus}</td>
-                <td style={{ padding: '10px 12px', fontWeight: 500, color: '#111' }}>{row.total}</td>
-                <td style={{ padding: '10px 12px', color: row.change.startsWith('-') ? '#e05' : '#090', fontWeight: 500 }}>{row.change}</td>
+                <td style={{ padding: '10px 12px', fontWeight: 400, color: '#222' }}>{row.name}</td>
+                <td style={{ padding: '10px 12px', fontWeight: 400, color: '#555' }}>{row.hc}</td>
+                <td style={{ padding: '10px 12px', fontWeight: 400, color: '#555' }}>{row.salary}</td>
+                <td style={{ padding: '10px 12px', fontWeight: 400, color: '#555' }}>{row.bonus}</td>
+                <td style={{ padding: '10px 12px', fontWeight: 400, color: '#111' }}>{row.total}</td>
+                <td style={{ padding: '10px 12px', color: row.change.startsWith('-') ? '#e05' : '#090', fontWeight: 400 }}>{row.change}</td>
               </tr>
             ))}
           </tbody>
@@ -687,23 +909,48 @@ const INITIAL_MESSAGES: Message[] = [
     id: 14,
     role: 'user',
     type: 'text',
-    text: 'Create a Q1 payroll summary report',
+    text: 'How has headcount changed over the last year?',
   },
   {
     id: 15,
     role: 'assistant',
     type: 'text',
-    text: "I've compiled the Q1 payroll data across all departments and generated the report.",
+    text: 'Here is headcount across the trailing twelve months (sample artifact from your workspace):',
   },
   {
     id: 16,
+    role: 'assistant',
+    type: 'chart',
+    presetId: 'headcount-trend',
+  },
+  {
+    id: 17,
+    role: 'user',
+    type: 'text',
+    text: 'Create a Q1 payroll summary report',
+  },
+  {
+    id: 18,
+    role: 'assistant',
+    type: 'text',
+    text: "I've compiled the Q1 payroll data across all departments and generated the report.",
+  },
+  {
+    id: 19,
     role: 'assistant',
     type: 'report-created',
     title: 'Q1 Payroll Summary Report',
   },
 ]
 
-const SUGGESTED = ['Show org chart', 'Run payroll', 'Open PTO policy', 'Generate offer letter']
+const SUGGESTED = [
+  'Show org chart',
+  'Run payroll',
+  'Show me a workflow',
+  'Create a schedule for my team',
+  'Open PTO policy',
+  'Generate offer letter',
+]
 
 const CHAT_HISTORY = [
   { id: 'current', title: 'Headcount Report Q1', preview: 'Q1 headcount by department…', date: 'Today', active: true },
@@ -713,6 +960,10 @@ const CHAT_HISTORY = [
   { id: 'h5', title: 'Benefits enrollment', preview: 'Open enrollment closes April 30…', date: 'Mar 12', active: false },
   { id: 'h6', title: 'Org chart review', preview: 'Here is your current org chart…', date: 'Mar 8', active: false },
 ]
+
+/** Default thread title shown in copilot chrome — reuse on dashboard surfaces so labels stay aligned. */
+export const CHAT_PANEL_DEFAULT_TITLE =
+  CHAT_HISTORY.find((c) => c.id === 'current')?.title ?? 'Chat'
 
 // ─── Props ───────────────────────────────────────────────────────────────────
 
@@ -732,9 +983,42 @@ interface ChatPanelProps {
   chatFill?: 'filled' | 'empty'
   /** Called when user wants the report panel to take over the full screen entirely */
   onReportFullscreen?: () => void
-  /** Canvas + chat left: collapse the dock; shown as a control to the right of “Rippling AI”. */
-  onRequestDockCollapse?: () => void
+  /** Chart artifact click — open report builder (edit) full screen. */
+  onOpenReportInEditMode?: () => void
+  /** Report-created card "Open" — navigate to main app canvas instead of the inline payroll report. */
+  onOpenReportCreatedPage?: () => void
+  /** Canvas page empty chat: dashboard hero + “Open in edit mode”. */
+  canvasDashboardHero?: boolean
+  onOpenDashboardEditMode?: () => void
+  /** Canvas dashboard edit mode: alternate hero + prompts while editing. */
+  canvasDashboardEditHero?: boolean
+  /** Workflow/report split beside chat — parent shell widens docked chat so chat + canvas fit. */
+  onSplitCanvasOpenChange?: (open: boolean) => void
+  /** Dashboard canvas edit + left-docked chat: double chevron hides the chat column without closing chat. */
+  onCollapseDashboardSideChat?: () => void
+  /** App shell: WIW schedule beside docked chat (same chrome behavior as dashboard edit). */
+  scheduleCanvasShellSplit?: boolean
+  /** Figma AI-components link card — opens canvas + schedule side-by-side in the shell. */
+  onOpenScheduleShellSplit?: () => void
+  /** Shell nav — increment nonce + set kind to open fullscreen chat + report/workflow rail. */
+  navSplitBootstrapNonce?: number
+  navSplitBootstrapKind?: 'reports' | 'workflows' | null
 }
+
+// ─── Chat / report split (full-screen chat + docked sidebar chat) ──────────
+
+const SPLIT_GRIP_PX = 6
+/** Chat column minimum when beside workflow or report (side-by-side). */
+const SIDE_BY_SIDE_CHAT_MIN_PX = 320
+/** Default width when opening side-by-side (user can resize down to {@link SIDE_BY_SIDE_CHAT_MIN_PX}). */
+const SIDE_BY_SIDE_CHAT_DEFAULT_PX = 474
+/** Minimum share of the split row for workflow / report canvas (50%). */
+const SIDE_BY_SIDE_CANVAS_MIN_FRACTION = 0.5
+/** Default initial chat width beside workflow / report (export for shell docs). */
+export const WORKFLOW_CHAT_PANEL_WIDTH_PX = SIDE_BY_SIDE_CHAT_DEFAULT_PX
+const HISTORY_SIDEBAR_W = 260
+/** Extra chrome row spanning chat + report when split — close top-right; reconciles duplicate rail actions. */
+export const SPLIT_UNIFIED_HEADER_HEIGHT_PX = 44
 
 // ─── Style helpers ───────────────────────────────────────────────────────────
 
@@ -750,7 +1034,56 @@ function headerIconBtn(active: boolean): React.CSSProperties {
   }
 }
 
+/** Side-by-side chrome — no focus ring on header icon buttons (full dismiss / hide chat). */
+function headerIconBtnSideBySide(active: boolean): React.CSSProperties {
+  return {
+    ...headerIconBtn(active),
+    outline: 'none',
+  }
+}
+
 // ─── Component ───────────────────────────────────────────────────────────────
+
+/** AI-components docked chat — Figma `Default chart` (267:16230, file AI-components). */
+const AI_COMP_DOCKED = {
+  surface: '#ffffff',
+  divider: '#e0dede',
+  ink: '#000000',
+  muted: '#716f6c',
+  userBubble: '#f2eeeb',
+} as const
+
+function formatChatMessageText(
+  text: string,
+  opts: { isUser: boolean; aiCompDocked: boolean },
+): React.ReactNode {
+  const linkColor = opts.isUser
+    ? opts.aiCompDocked
+      ? AI_COMP_DOCKED.ink
+      : '#0b57d0'
+    : 'var(--brand)'
+  const parts = text.split(/(https?:\/\/[^\s<>"']+)/g)
+  return parts.map((part, i) => {
+    if (/^https?:\/\//.test(part)) {
+      return (
+        <a
+          key={i}
+          href={part}
+          target="_blank"
+          rel="noopener noreferrer"
+          style={{
+            color: linkColor,
+            textDecoration: 'underline',
+            wordBreak: 'break-all',
+          }}
+        >
+          {part}
+        </a>
+      )
+    }
+    return <span key={i}>{part}</span>
+  })
+}
 
 const GREETING: Message = {
   id: 0,
@@ -759,13 +1092,129 @@ const GREETING: Message = {
   text: "Hi! I'm your Rippling AI. What can I help you with today?",
 }
 
+/** Unified split chrome — breadcrumbs next to close (workflow/report beside chat). */
+function UnifiedSplitBreadcrumbs({
+  segments,
+  aiCompDocked,
+}: {
+  segments: readonly string[]
+  aiCompDocked: boolean
+}) {
+  const muted = aiCompDocked ? AI_COMP_DOCKED.muted : '#737373'
+  const ink = aiCompDocked ? AI_COMP_DOCKED.ink : '#111'
+  const sepColor = aiCompDocked ? '#d4d0cc' : '#c4c4c4'
+  return (
+    <nav
+      aria-label="Location"
+      style={{
+        flex: 1,
+        minWidth: 0,
+        display: 'flex',
+        alignItems: 'center',
+        flexWrap: 'wrap',
+        rowGap: 2,
+        columnGap: 0,
+        fontSize: 13,
+        fontFamily: 'var(--font-sans)',
+        letterSpacing: '-0.1px',
+        lineHeight: 1.35,
+      }}
+    >
+      {segments.map((label, i) => {
+        const isLast = i === segments.length - 1
+        return (
+          <React.Fragment key={`${i}-${label}`}>
+            {i > 0 && (
+              <span style={{ color: sepColor, userSelect: 'none', padding: '0 5px', flexShrink: 0 }} aria-hidden>
+                ›
+              </span>
+            )}
+            <span
+              style={{
+                color: isLast ? ink : muted,
+                fontWeight: isLast ? 500 : 400,
+                overflow: 'hidden',
+                textOverflow: 'ellipsis',
+                whiteSpace: 'nowrap',
+                minWidth: 0,
+                ...(isLast ? { flexShrink: 1 } : { flexShrink: 0 }),
+              }}
+            >
+              {label}
+            </span>
+          </React.Fragment>
+        )
+      })}
+    </nav>
+  )
+}
+
+/** Full-width shell row spanning docked chat + main canvas (dashboard edit side-by-side). Matches unified split chrome in {@link ChatPanel}. */
+export function ShellSplitUnifiedHeader({
+  segments,
+  onClose,
+  panelBg = 'var(--grey-50)',
+  aiCompDocked = true,
+  showSideNavButton = false,
+  onSideNavClick,
+}: {
+  segments: readonly string[]
+  onClose: () => void
+  panelBg?: string
+  aiCompDocked?: boolean
+  /** When docked chat is collapsed, show nav control (same affordance as top bar `menu`) to the left of breadcrumbs. */
+  showSideNavButton?: boolean
+  onSideNavClick?: () => void
+}) {
+  return (
+    <div
+      style={{
+        height: SPLIT_UNIFIED_HEADER_HEIGHT_PX,
+        flexShrink: 0,
+        borderBottom: '1px solid var(--grey-200)',
+        background: aiCompDocked ? AI_COMP_DOCKED.surface : panelBg,
+        display: 'flex',
+        alignItems: 'center',
+        padding: '0 10px 0 14px',
+        gap: 8,
+      }}
+    >
+      {showSideNavButton && onSideNavClick && (
+        <motion.button
+          type="button"
+          whileHover={{ scale: 1.06 }}
+          whileTap={{ scale: 0.94 }}
+          onClick={onSideNavClick}
+          title="Open navigation"
+          aria-label="Open navigation"
+          style={headerIconBtnSideBySide(false)}
+        >
+          <Icon name="menu" size={20} aria-hidden />
+        </motion.button>
+      )}
+      <UnifiedSplitBreadcrumbs aiCompDocked={aiCompDocked} segments={segments} />
+      <motion.button
+        type="button"
+        whileHover={{ scale: 1.06 }}
+        whileTap={{ scale: 0.94 }}
+        onClick={onClose}
+        title="Close side by side"
+        aria-label="Close side by side"
+        style={headerIconBtnSideBySide(false)}
+      >
+        <Icon name="close" size={18} />
+      </motion.button>
+    </div>
+  )
+}
+
 const ORIENTATION_OPTIONS: { label: string; value: ChatOrientation; icon: string }[] = [
   { label: 'Full screen', value: 'fullscreen', icon: 'open_in_full' },
   { label: 'Side bar',    value: 'sidebar',    icon: 'dock_to_right' },
   { label: 'Floating',   value: 'floating',   icon: 'picture_in_picture' },
 ]
 
-export function ChatPanel({ mode, orientation = 'sidebar', onOrientationChange, onClose, initialQuery, elevation = 'base', panelBg = 'var(--grey-50)', chatFill = 'filled', onReportFullscreen, onRequestDockCollapse }: ChatPanelProps) {
+export function ChatPanel({ mode, orientation = 'sidebar', onOrientationChange, onClose, initialQuery, elevation = 'base', panelBg = 'var(--grey-50)', chatFill = 'filled', onReportFullscreen, onOpenReportInEditMode, onOpenReportCreatedPage, canvasDashboardHero = false, onOpenDashboardEditMode, canvasDashboardEditHero = false, onSplitCanvasOpenChange, onCollapseDashboardSideChat, scheduleCanvasShellSplit = false, onOpenScheduleShellSplit, navSplitBootstrapNonce = 0, navSplitBootstrapKind = null }: ChatPanelProps) {
   const [messages, setMessages] = useState<Message[]>(() => {
     if (initialQuery) {
       return [
@@ -776,37 +1225,296 @@ export function ChatPanel({ mode, orientation = 'sidebar', onOrientationChange, 
     return chatFill === 'empty' ? [GREETING] : INITIAL_MESSAGES
   })
   const [input, setInput] = useState('')
+  const [mentionOpen, setMentionOpen] = useState(false)
+  const [mentionAnchor, setMentionAnchor] = useState<{ start: number } | null>(null)
+  const [mentionQuery, setMentionQuery] = useState('')
+  const composerFieldRef = useRef<HTMLTextAreaElement | HTMLInputElement>(null)
   const [showHistory, setShowHistory] = useState(false)
+  /** Which mock thread is selected — drives the chat title in chrome + empty hero. */
+  const [activeHistoryId, setActiveHistoryId] = useState('current')
   const [showMoreMenu, setShowMoreMenu] = useState(false)
   const [showReportPanel, setShowReportPanel] = useState(false)
-  const [pendingReportOpen, setPendingReportOpen] = useState(false)
+  const [showWorkflowPanel, setShowWorkflowPanel] = useState(false)
+  const [showSchedulePanel, setShowSchedulePanel] = useState(false)
+  /** Resizable chat column width (px) when workflow/report is open beside chat. */
+  const [sideBySideChatWidthPx, setSideBySideChatWidthPx] = useState<number | null>(null)
+  const [reportSplitDragging, setReportSplitDragging] = useState(false)
+  const splitLayoutRef = useRef<HTMLDivElement>(null)
+  const reportSplitDrag = useRef<{ startX: number; startChatW: number } | null>(null)
   const bottomRef = useRef<HTMLDivElement>(null)
   const hasSentInitial = useRef(false)
   const moreMenuRef    = useRef<HTMLDivElement>(null)
   const messagesRef    = useRef<HTMLDivElement>(null)
   const isMounted      = useRef(false)
+  const lastNavSplitNonceRef = useRef(0)
   const cw = useContainerWidth(messagesRef)
 
   useEffect(() => { isMounted.current = true }, [])
 
-  const isFullChat = mode === 'fullchat'
-
-  // Once we've transitioned to fullchat (triggered by clicking the report card
-  // from sidebar mode), open the report panel automatically.
   useEffect(() => {
-    if (isFullChat && pendingReportOpen) {
-      setShowReportPanel(true)
-      setPendingReportOpen(false)
+    if (!mentionOpen) return
+    function onKey(e: KeyboardEvent) {
+      if (e.key === 'Escape') {
+        setMentionOpen(false)
+        setMentionAnchor(null)
+      }
     }
-  }, [isFullChat, pendingReportOpen])
+    document.addEventListener('keydown', onKey)
+    return () => document.removeEventListener('keydown', onKey)
+  }, [mentionOpen])
+
+  function handleComposerCaret(detail: { value: string; selectionStart: number }) {
+    const { value, selectionStart } = detail
+    const before = value.slice(0, selectionStart)
+    const at = before.lastIndexOf('@')
+    if (at === -1) {
+      setMentionOpen(false)
+      setMentionAnchor(null)
+      return
+    }
+    const frag = before.slice(at + 1)
+    if (frag.includes(' ') || frag.includes('\n') || frag.includes(':')) {
+      setMentionOpen(false)
+      setMentionAnchor(null)
+      return
+    }
+    setMentionOpen(true)
+    setMentionAnchor({ start: at })
+    setMentionQuery(frag.toLowerCase())
+  }
+
+  function insertChartMention(presetId: ChartArtifactPresetId) {
+    if (mentionAnchor == null) return
+    const el = composerFieldRef.current
+    const pos = el && 'selectionStart' in el && el.selectionStart != null ? el.selectionStart : input.length
+    const before = input.slice(0, mentionAnchor.start)
+    const after = input.slice(pos)
+    const insertion = `@chart:${presetId} `
+    const next = before + insertion + after
+    setInput(next)
+    setMentionOpen(false)
+    setMentionAnchor(null)
+    requestAnimationFrame(() => {
+      if (el && 'focus' in el) {
+        ;(el as HTMLTextAreaElement).focus?.()
+        const caret = before.length + insertion.length
+        el.setSelectionRange?.(caret, caret)
+      }
+    })
+  }
+
+  const isFullChat = mode === 'fullchat'
   const isCopilot = mode === 'copilot'
   const isCanvas = mode === 'canvas'
+  /** Sidebar / docked Rippling AI column — match AI-components mock chrome. */
+  const aiCompDocked = isCopilot && !isFullChat
+  /** Split report beside thread in full-screen chat or docked sidebar (not floating-only canvas without copilot). */
+  const splitReportWithChat = isFullChat || aiCompDocked
+  const splitCanvasOpen = showWorkflowPanel || showReportPanel || showSchedulePanel
+  /** Chat beside report/workflow/canvas edit — hide chat history to avoid stacked side rails. */
+  const sideBySideActive = splitCanvasOpen || Boolean(canvasDashboardEditHero)
+  const showHistoryUi = showHistory && !sideBySideActive
+  /** Full-screen chat + report only: equal halves. Workflow split uses fixed chat width instead. */
+  const splitRailHalfHalf = isFullChat && showReportPanel
+  /** Workflow or schedule editor beside chat — same chat rail layout as workflow. */
+  const workflowLikeSplitBesideChat =
+    (showWorkflowPanel || showSchedulePanel) && splitReportWithChat && splitCanvasOpen
+  /** Match workflow split rail: 52px header, 13px title — includes canvas dashboard edit beside chat. */
+  const copilotSplitRailHeader =
+    workflowLikeSplitBesideChat || (Boolean(canvasDashboardEditHero) && aiCompDocked)
+  /** Dashboard canvas edit beside docked chat — match workflow/report split header (double chevron hides chat). */
+  const dashboardSideBySideDocked =
+    (Boolean(canvasDashboardEditHero) || Boolean(scheduleCanvasShellSplit)) && aiCompDocked
+  const chatHeaderHideColumnUi =
+    (splitReportWithChat && splitCanvasOpen) || dashboardSideBySideDocked
+  const activeChatTitle = CHAT_HISTORY.find((c) => c.id === activeHistoryId)?.title ?? 'Chat'
 
-  // Re-seed messages whenever the chatFill prop changes (e.g. toggled in prototype options)
+  const hideReportSplit = useCallback(() => {
+    setShowReportPanel(false)
+    setSideBySideChatWidthPx(null)
+  }, [])
+
+  const hideWorkflowSplit = useCallback(() => {
+    setShowWorkflowPanel(false)
+    setSideBySideChatWidthPx(null)
+  }, [])
+
+  const hideScheduleSplit = useCallback(() => {
+    setShowSchedulePanel(false)
+    setSideBySideChatWidthPx(null)
+  }, [])
+
+  /** While workflow/report is open beside chat, header Close hides only the chat column (canvas stays). */
+  const [chatHiddenBesideSplit, setChatHiddenBesideSplit] = useState(false)
+  const showChatColumn =
+    !splitReportWithChat || !splitCanvasOpen || !chatHiddenBesideSplit
+
+  useEffect(() => {
+    if (!showWorkflowPanel && !showReportPanel && !showSchedulePanel) setChatHiddenBesideSplit(false)
+  }, [showWorkflowPanel, showReportPanel, showSchedulePanel])
+
+  useEffect(() => {
+    onSplitCanvasOpenChange?.(Boolean(showWorkflowPanel || showReportPanel || showSchedulePanel))
+  }, [showWorkflowPanel, showReportPanel, showSchedulePanel, onSplitCanvasOpenChange])
+
+  useEffect(() => {
+    if (!navSplitBootstrapNonce || navSplitBootstrapNonce <= lastNavSplitNonceRef.current) return
+    if (navSplitBootstrapKind !== 'reports' && navSplitBootstrapKind !== 'workflows') return
+    lastNavSplitNonceRef.current = navSplitBootstrapNonce
+    setChatHiddenBesideSplit(false)
+    setShowSchedulePanel(false)
+    if (navSplitBootstrapKind === 'reports') {
+      setShowWorkflowPanel(false)
+      setShowReportPanel(true)
+    } else {
+      setShowReportPanel(false)
+      setShowWorkflowPanel(true)
+    }
+    onOrientationChange?.('fullscreen')
+  }, [navSplitBootstrapNonce, navSplitBootstrapKind, onOrientationChange])
+
+  useEffect(() => {
+    if (sideBySideActive) setShowHistory(false)
+  }, [sideBySideActive])
+
+  const handleChatHeaderClose = useCallback(() => {
+    if (splitReportWithChat && splitCanvasOpen) {
+      setChatHiddenBesideSplit(true)
+      return
+    }
+    if (dashboardSideBySideDocked && onCollapseDashboardSideChat) {
+      onCollapseDashboardSideChat()
+      return
+    }
+    onClose?.()
+  }, [
+    splitReportWithChat,
+    splitCanvasOpen,
+    dashboardSideBySideDocked,
+    onCollapseDashboardSideChat,
+    onClose,
+  ])
+
+  const railOnlyWorkflowOrReport =
+    splitReportWithChat && splitCanvasOpen && chatHiddenBesideSplit
+
+  const closeSplitCanvas = useCallback(() => {
+    hideReportSplit()
+    hideWorkflowSplit()
+    hideScheduleSplit()
+    setChatHiddenBesideSplit(false)
+    /** Chart/report flow upgrades docked chat to fullscreen; closing the split should return to the base (sidebar) shell, not leave fullscreen chat open. */
+    onOrientationChange?.('sidebar')
+  }, [hideReportSplit, hideWorkflowSplit, hideScheduleSplit, onOrientationChange])
+
+  const showUnifiedSplitChrome =
+    splitReportWithChat && (showReportPanel || showWorkflowPanel || showSchedulePanel)
+
+  /** Clamp chat width: min 320px; canvas/workflow keeps ≥50% of split row (minus grip). */
+  const clampSideBySideChatWidth = useCallback((w: number) => {
+    const root = splitLayoutRef.current
+    const historyW = isFullChat && showHistoryUi ? HISTORY_SIDEBAR_W : 0
+    const inner =
+      root != null
+        ? root.clientWidth - historyW
+        : typeof window !== 'undefined'
+          ? window.innerWidth - historyW
+          : 1200
+    const minCanvasPx = inner * SIDE_BY_SIDE_CANVAS_MIN_FRACTION
+    const maxChatPx = inner - minCanvasPx - SPLIT_GRIP_PX
+    const minChatPx = SIDE_BY_SIDE_CHAT_MIN_PX
+    if (maxChatPx <= 0) return Math.max(0, w)
+    if (maxChatPx < minChatPx) return Math.min(Math.max(w, 0), maxChatPx)
+    return Math.min(Math.max(w, minChatPx), maxChatPx)
+  }, [isFullChat, showHistoryUi])
+
+  const effectiveSideBySideChatPx =
+    splitReportWithChat && splitCanvasOpen && showChatColumn
+      ? clampSideBySideChatWidth(sideBySideChatWidthPx ?? SIDE_BY_SIDE_CHAT_DEFAULT_PX)
+      : SIDE_BY_SIDE_CHAT_DEFAULT_PX
+
+  useLayoutEffect(() => {
+    if (
+      !splitReportWithChat ||
+      (!showReportPanel && !showWorkflowPanel && !showSchedulePanel) ||
+      !splitLayoutRef.current
+    )
+      return
+    setSideBySideChatWidthPx((prev) =>
+      clampSideBySideChatWidth(prev ?? SIDE_BY_SIDE_CHAT_DEFAULT_PX),
+    )
+  }, [
+    splitReportWithChat,
+    showReportPanel,
+    showWorkflowPanel,
+    showSchedulePanel,
+    showHistoryUi,
+    clampSideBySideChatWidth,
+  ])
+
+  useEffect(() => {
+    if (
+      !splitReportWithChat ||
+      (!showReportPanel && !showWorkflowPanel && !showSchedulePanel) ||
+      !splitLayoutRef.current
+    )
+      return
+    const el = splitLayoutRef.current
+    const ro = new ResizeObserver(() => {
+      setSideBySideChatWidthPx((prev) =>
+        clampSideBySideChatWidth(prev ?? SIDE_BY_SIDE_CHAT_DEFAULT_PX),
+      )
+    })
+    ro.observe(el)
+    return () => ro.disconnect()
+  }, [
+    splitReportWithChat,
+    showReportPanel,
+    showWorkflowPanel,
+    showSchedulePanel,
+    showHistoryUi,
+    clampSideBySideChatWidth,
+  ])
+
+  const splitGripPointerDown = useCallback(
+    (e: React.PointerEvent) => {
+      if (railOnlyWorkflowOrReport) return
+      const w = sideBySideChatWidthPx ?? SIDE_BY_SIDE_CHAT_DEFAULT_PX
+      e.preventDefault()
+      reportSplitDrag.current = { startX: e.clientX, startChatW: clampSideBySideChatWidth(w) }
+      setReportSplitDragging(true)
+      ;(e.currentTarget as HTMLDivElement).setPointerCapture(e.pointerId)
+    },
+    [railOnlyWorkflowOrReport, sideBySideChatWidthPx, clampSideBySideChatWidth],
+  )
+
+  const splitGripPointerMove = useCallback(
+    (e: React.PointerEvent) => {
+      if (!reportSplitDrag.current) return
+      const delta = e.clientX - reportSplitDrag.current.startX
+      const next = clampSideBySideChatWidth(reportSplitDrag.current.startChatW + delta)
+      setSideBySideChatWidthPx(next)
+    },
+    [clampSideBySideChatWidth],
+  )
+
+  const reportSplitPointerUp = useCallback((e: React.PointerEvent) => {
+    if (!reportSplitDrag.current) return
+    reportSplitDrag.current = null
+    setReportSplitDragging(false)
+    try {
+      ;(e.currentTarget as HTMLDivElement).releasePointerCapture(e.pointerId)
+    } catch {
+      /* released */
+    }
+  }, [])
+
+  // Re-seed when chatFill changes, or when `initialQuery` is cleared (stale pending message was hiding empty-state CTAs).
   useEffect(() => {
     if (initialQuery) return
     setMessages(chatFill === 'empty' ? [GREETING] : INITIAL_MESSAGES)
-  }, [chatFill]) // eslint-disable-line
+    hasSentInitial.current = false
+  }, [chatFill, initialQuery]) // eslint-disable-line
 
   // Show the hero + prompts only in empty fill mode before any user message
   const showEmptyHero = chatFill === 'empty' && messages.every((m) => m.role !== 'user')
@@ -832,15 +1540,8 @@ export function ChatPanel({ mode, orientation = 'sidebar', onOrientationChange, 
     if (!initialQuery || hasSentInitial.current) return
     hasSentInitial.current = true
     const t = setTimeout(() => {
-      setMessages((prev) => [
-        ...prev,
-        {
-          id: Date.now(),
-          role: 'assistant',
-          type: 'text',
-          text: "I'm looking into that for you. Give me a moment to pull the latest data from your Rippling workspace...",
-        } satisfies TextMessage,
-      ])
+      const base = Date.now()
+      setMessages((prev) => [...prev, ...assistantMessagesAfterUserText(initialQuery, base)])
     }, 900)
     return () => clearTimeout(t)
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -848,26 +1549,50 @@ export function ChatPanel({ mode, orientation = 'sidebar', onOrientationChange, 
 
   function sendMessage(text: string) {
     if (!text.trim()) return
-    const userMsg: Message = { id: Date.now(), role: 'user', type: 'text', text: text.trim() }
+    const tokenRe = /@chart:([\w-]+)/g
+    const fromToken: ChartArtifactPresetId[] = []
+    let m: RegExpExecArray | null
+    const validIds = new Set(CHART_ARTIFACT_PRESETS.map((p) => p.id))
+    while ((m = tokenRe.exec(text)) !== null) {
+      if (validIds.has(m[1] as ChartArtifactPresetId)) fromToken.push(m[1] as ChartArtifactPresetId)
+    }
+    const fromNlp = inferChartPresetIdsFromMessage(text)
+    const seen = new Set<ChartArtifactPresetId>()
+    const ids: ChartArtifactPresetId[] = []
+    for (const id of [...fromToken, ...fromNlp]) {
+      if (seen.has(id)) continue
+      seen.add(id)
+      ids.push(id)
+      if (ids.length >= 5) break
+    }
+    const cleaned = text
+      .trim()
+      .replace(/@chart:[\w-]+\s*/g, ' ')
+      .replace(/\s+/g, ' ')
+      .trim()
+    const userDisplay =
+      cleaned.length > 0 ? cleaned : (ids.length ? ids.map(chartPresetTitle).join(' · ') : text.trim())
+
+    const userMsg: Message = { id: Date.now(), role: 'user', type: 'text', text: userDisplay }
     setMessages((prev) => [...prev, userMsg])
     setInput('')
+    setMentionOpen(false)
+    setMentionAnchor(null)
     setTimeout(() => {
-      const reply: Message = {
-        id: Date.now() + 1,
-        role: 'assistant',
-        type: 'text',
-        text: "I'm looking into that for you. Give me a moment to pull the latest data from your Rippling workspace...",
-      }
-      setMessages((prev) => [...prev, reply])
+      const base = Date.now() + 1
+      setMessages((prev) => [...prev, ...assistantMessagesAfterUserText(text, base)])
     }, 800)
   }
 
   return (
-    <div style={{ display: 'flex', height: '100%', overflow: 'hidden', position: 'relative', zIndex: 30 }}>
+    <div
+      ref={splitLayoutRef}
+      style={{ display: 'flex', height: '100%', overflow: 'hidden', position: 'relative', zIndex: 30 }}
+    >
 
       {/* ── LEFT: History sidebar (fullchat mode only) ── */}
       <AnimatePresence>
-        {isFullChat && showHistory && (
+        {isFullChat && showHistoryUi && (
           <motion.div
             key="history-sidebar"
             initial={{ width: 0, opacity: 0 }}
@@ -882,7 +1607,7 @@ export function ChatPanel({ mode, orientation = 'sidebar', onOrientationChange, 
             }}
           >
             <div style={{ padding: '0 12px', height: 44, borderBottom: '1px solid var(--grey-200)', display: 'flex', alignItems: 'center', gap: 6 }}>
-              <span style={{ fontSize: 13, fontWeight: 500, color: '#111', flex: 1 }}>Chat history</span>
+              <span style={{ fontSize: 13, fontWeight: 400, color: '#111', flex: 1 }}>Chat history</span>
               <motion.button whileHover={{ scale: 1.08 }} whileTap={{ scale: 0.94 }} onClick={() => setShowHistory(false)} style={headerIconBtn(false)}>
                 <Icon name="close" size={16} />
               </motion.button>
@@ -894,15 +1619,18 @@ export function ChatPanel({ mode, orientation = 'sidebar', onOrientationChange, 
                   initial={{ opacity: 0, x: -6 }}
                   animate={{ opacity: 1, x: 0 }}
                   transition={{ delay: i * 0.04 }}
-                  onClick={() => setShowHistory(false)}
+                  onClick={() => {
+                    setActiveHistoryId(chat.id)
+                    setShowHistory(false)
+                  }}
                   style={{
                     width: '100%', padding: '8px 10px', borderRadius: 6,
-                    border: 'none', background: chat.active ? '#e8e8e8' : 'transparent',
+                    border: 'none', background: chat.id === activeHistoryId ? '#e8e8e8' : 'transparent',
                     cursor: 'pointer', textAlign: 'left',
                   }}
                 >
                   <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 2 }}>
-                    <span style={{ fontSize: 12.5, fontWeight: chat.active ? 500 : 400, color: '#111' }}>{chat.title}</span>
+                    <span style={{ fontSize: 12.5, fontWeight: 400, color: '#111' }}>{chat.title}</span>
                     <span style={{ fontSize: 10, color: '#bbb' }}>{chat.date}</span>
                   </div>
                   <div style={{ fontSize: 11, color: '#999', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{chat.preview}</div>
@@ -913,27 +1641,130 @@ export function ChatPanel({ mode, orientation = 'sidebar', onOrientationChange, 
         )}
       </AnimatePresence>
 
-      {/* ── CENTER: Main chat column ── */}
-      <div
+      {/* ── Chat + split rail share one canvas; unified chrome when report/workflow open ── */}
+      <div style={{ flex: 1, display: 'flex', flexDirection: 'column', minWidth: 0, minHeight: 0 }}>
+        {showUnifiedSplitChrome && (
+          <div
+            style={{
+              height: SPLIT_UNIFIED_HEADER_HEIGHT_PX,
+              flexShrink: 0,
+              borderBottom: '1px solid var(--grey-200)',
+              background: aiCompDocked ? AI_COMP_DOCKED.surface : panelBg,
+              display: 'flex',
+              alignItems: 'center',
+              padding: '0 10px 0 14px',
+              gap: 8,
+            }}
+          >
+            {chatHiddenBesideSplit && splitCanvasOpen && (
+              <motion.button
+                type="button"
+                whileHover={{ scale: 1.06 }}
+                whileTap={{ scale: 0.94 }}
+                onClick={() => setChatHiddenBesideSplit(false)}
+                title="Show chat"
+                style={headerIconBtn(false)}
+              >
+                <Icon name="view_sidebar" size={18} />
+              </motion.button>
+            )}
+            <UnifiedSplitBreadcrumbs
+              aiCompDocked={aiCompDocked}
+              segments={
+                showSchedulePanel
+                  ? (['Scheduling', 'WIW', SCHEDULE_CANVAS_DISPLAY_NAME] as const)
+                  : showWorkflowPanel
+                    ? (['Workflows', 'Payroll', WORKFLOW_CANVAS_DISPLAY_NAME] as const)
+                    : (['Dashboards & Reports', 'Reports', REPORT_BUILDER_DISPLAY_NAME] as const)
+              }
+            />
+            <motion.button
+              type="button"
+              whileHover={{ scale: 1.06 }}
+              whileTap={{ scale: 0.94 }}
+              onClick={closeSplitCanvas}
+              title="Close side by side"
+              aria-label="Close side by side"
+              style={headerIconBtnSideBySide(false)}
+            >
+              <Icon name="close" size={18} />
+            </motion.button>
+          </div>
+        )}
+        <div style={{ flex: 1, display: 'flex', flexDirection: 'row', minHeight: 0, minWidth: 0 }}>
+      {/* ── CENTER: Main chat column (animated collapse beside workflow/report) ── */}
+      <motion.div
+        initial={false}
+        animate={
+          !(splitReportWithChat && splitCanvasOpen)
+            ? {
+                flexGrow: 1,
+                flexShrink: 1,
+                flexBasis: 0,
+                opacity: 1,
+                maxWidth: '100%',
+              }
+            : workflowLikeSplitBesideChat
+              ? showChatColumn
+                ? {
+                    flex: `0 0 ${effectiveSideBySideChatPx}px`,
+                    opacity: 1,
+                    maxWidth: effectiveSideBySideChatPx,
+                  }
+                : {
+                    flex: '0 0 0px',
+                    opacity: 0,
+                    maxWidth: 0,
+                  }
+              : showChatColumn
+                ? {
+                    flex: `0 0 ${effectiveSideBySideChatPx}px`,
+                    flexGrow: 0,
+                    flexShrink: 0,
+                    opacity: 1,
+                    maxWidth: effectiveSideBySideChatPx,
+                  }
+                : {
+                    flexGrow: 0,
+                    flexShrink: 1,
+                    flexBasis: 0,
+                    opacity: 0,
+                    maxWidth: 0,
+                  }
+        }
+        transition={
+          splitReportWithChat && splitCanvasOpen
+            ? { type: 'spring', stiffness: 400, damping: 34, mass: 0.82 }
+            : { duration: 0 }
+        }
         style={{
-          flex: 1,
           display: 'flex',
           flexDirection: 'column',
-          background: panelBg,
+          background: aiCompDocked ? AI_COMP_DOCKED.surface : panelBg,
           overflow: 'hidden',
-          minWidth: 0,
+          minWidth:
+            splitReportWithChat && splitCanvasOpen && showChatColumn
+              ? effectiveSideBySideChatPx
+              : 0,
+          boxSizing: 'border-box',
+          pointerEvents:
+            splitReportWithChat && splitCanvasOpen && !showChatColumn ? 'none' : 'auto',
         }}
       >
       {/* Header */}
       <div
         style={{
-          padding: '0 10px',
-          height: 44,
-          borderBottom: '1px solid #ebebeb',
+          padding: aiCompDocked ? '0 16px' : '0 10px',
+          height: splitRailHalfHalf || copilotSplitRailHeader
+            ? REPORT_BUILDER_HEADER_HEIGHT_PX
+            : aiCompDocked
+              ? 40
+              : 44,
+          borderBottom: aiCompDocked ? `1px solid ${AI_COMP_DOCKED.divider}` : '1px solid #ebebeb',
           display: 'flex',
           alignItems: 'center',
           flexShrink: 0,
-          background: panelBg,
+          background: aiCompDocked ? AI_COMP_DOCKED.surface : panelBg,
           borderRadius: 0,
           gap: 6,
         }}
@@ -941,42 +1772,33 @@ export function ChatPanel({ mode, orientation = 'sidebar', onOrientationChange, 
         {/* Copilot header: branded label left, actions right */}
         {isCopilot && (
           <>
-            {/* History toggle — leftmost: hamburger = open list, chevron = go back */}
-            <motion.button
-              onClick={() => setShowHistory((v) => !v)}
-              whileHover={{ scale: 1.08 }} whileTap={{ scale: 0.94 }}
-              title={showHistory ? 'Back to chat' : 'Chat history'}
-              style={headerIconBtn(showHistory)}
-            >
-              <Icon name={showHistory ? 'chevron_left' : 'menu'} size={18} />
-            </motion.button>
+            {/* History toggle — hidden in side-by-side (report/workflow/dashboard edit) */}
+            {!sideBySideActive && (
+              <motion.button
+                onClick={() => setShowHistory((v) => !v)}
+                whileHover={{ scale: 1.08 }} whileTap={{ scale: 0.94 }}
+                title={showHistory ? 'Back to chat' : 'Chat history'}
+                style={headerIconBtn(showHistory)}
+              >
+                <Icon name={showHistory ? 'chevron_left' : 'view_sidebar'} size={18} />
+              </motion.button>
+            )}
 
             {/* AI identity */}
             <div style={{ width: 20, height: 20, borderRadius: '50%', background: '#111', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
               <img src="/rippling-ai.png" width={10} height={10} style={{ display: 'block', filter: 'brightness(0) invert(1)' }} />
             </div>
             <div style={{ flex: 1, display: 'flex', alignItems: 'center', gap: 6, minWidth: 0 }}>
-              <span style={{ fontSize: 13, fontWeight: 500, color: '#111', letterSpacing: '-0.1px' }}>Rippling AI</span>
-              <span style={{ fontSize: 11, color: '#aaa', display: 'flex', alignItems: 'center', gap: 3 }}>
-                <span style={{ width: 5, height: 5, borderRadius: '50%', background: '#bbb', display: 'inline-block' }} />
-                Ready
-              </span>
+              <span style={{ fontSize: copilotSplitRailHeader ? 13 : aiCompDocked ? 14 : 13, fontWeight: 400, color: aiCompDocked ? AI_COMP_DOCKED.ink : '#111', letterSpacing: '-0.1px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{activeChatTitle}</span>
             </div>
-
-            {onRequestDockCollapse && (
-              <motion.button
-                onClick={onRequestDockCollapse}
-                whileHover={{ scale: 1.08 }} whileTap={{ scale: 0.94 }}
-                title="Collapse chat"
-                style={headerIconBtn(false)}
-              >
-                <Icon name="chevron_left" size={18} />
-              </motion.button>
-            )}
 
             {/* New chat */}
             <motion.button
-              onClick={() => { setMessages([GREETING]); setShowHistory(false) }}
+              onClick={() => {
+                setMessages([GREETING])
+                setActiveHistoryId('current')
+                setShowHistory(false)
+              }}
               whileHover={{ scale: 1.08 }} whileTap={{ scale: 0.94 }}
               title="New chat"
               style={headerIconBtn(false)}
@@ -1028,7 +1850,7 @@ export function ChatPanel({ mode, orientation = 'sidebar', onOrientationChange, 
                               color: active ? '#111' : '#333',
                               fontSize: 13, cursor: 'pointer',
                               display: 'flex', alignItems: 'center', gap: 9,
-                              fontWeight: active ? 500 : 400,
+                              fontWeight: 400,
                               textAlign: 'left',
                             }}
                           >
@@ -1043,66 +1865,63 @@ export function ChatPanel({ mode, orientation = 'sidebar', onOrientationChange, 
               </div>
             )}
 
-            {/* Close panel */}
+            {/* Side-by-side: chevron = hide chat column; otherwise close exits docked chat */}
             {onClose && (
               <motion.button
-                onClick={onClose}
+                onClick={handleChatHeaderClose}
                 whileHover={{ scale: 1.08 }} whileTap={{ scale: 0.94 }}
-                title="Close"
-                style={headerIconBtn(false)}
+                title={chatHeaderHideColumnUi ? 'Hide chat' : 'Close'}
+                aria-label={chatHeaderHideColumnUi ? 'Hide chat' : 'Close'}
+                style={
+                  chatHeaderHideColumnUi ? headerIconBtnSideBySide(false) : headerIconBtn(false)
+                }
               >
-                <Icon name="close" size={18} />
+                <Icon
+                  name={chatHeaderHideColumnUi ? 'keyboard_double_arrow_right' : 'close'}
+                  size={18}
+                />
               </motion.button>
             )}
           </>
         )}
 
-        {/* Full screen header — same controls as copilot */}
+        {/* Full screen header — sidebar icon opens chat history (hidden when beside report/workflow/canvas edit) */}
         {!isCopilot && (
           <>
-            {/* Back from history */}
-            <AnimatePresence>
-              {showHistory && (
-                <motion.button
-                  initial={{ opacity: 0, x: -6 }} animate={{ opacity: 1, x: 0 }} exit={{ opacity: 0, x: -6 }}
-                  onClick={() => setShowHistory(false)}
-                  style={headerIconBtn(false)}
-                >
-                  <Icon name="arrow_back" size={18} />
-                </motion.button>
-              )}
-            </AnimatePresence>
-
-            <div style={{ width: 20, height: 20, borderRadius: '50%', background: '#111', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
-              <img src="/rippling-ai.png" width={10} height={10} style={{ display: 'block', filter: 'brightness(0) invert(1)' }} />
-            </div>
-            <div style={{ flex: 1, minWidth: 0, paddingLeft: 6, display: 'flex', alignItems: 'center', gap: 6 }}>
-              <span style={{ fontSize: 13, fontWeight: 500, color: '#111' }}>
-                {showHistory ? 'Chat history' : 'Rippling AI'}
-              </span>
-              {!showHistory && (
-                <span style={{ fontSize: 11, color: '#aaa', display: 'flex', alignItems: 'center', gap: 3 }}>
-                  <span style={{ width: 5, height: 5, borderRadius: '50%', background: '#bbb', display: 'inline-block' }} />
-                  Ready
-                </span>
-              )}
-            </div>
-
-            {/* History toggle */}
-            {!showHistory && (
+            {!sideBySideActive && (
               <motion.button
-                onClick={() => setShowHistory(true)}
+                type="button"
+                onClick={() => setShowHistory((v) => !v)}
                 whileHover={{ scale: 1.08 }} whileTap={{ scale: 0.94 }}
-                title="Chat history"
-                style={headerIconBtn(false)}
+                title={showHistory ? 'Hide chat history' : 'Show chat history'}
+                style={headerIconBtn(showHistory)}
               >
-                <Icon name="history" size={18} />
+                <Icon name={showHistory ? 'chevron_left' : 'view_sidebar'} size={18} />
               </motion.button>
             )}
+            <div style={{ flex: 1, minWidth: 0, display: 'flex', alignItems: 'center', gap: 8 }}>
+              <span
+                style={{
+                  fontSize: 13,
+                  fontWeight: 400,
+                  color: '#111',
+                  letterSpacing: '-0.1px',
+                  overflow: 'hidden',
+                  textOverflow: 'ellipsis',
+                  whiteSpace: 'nowrap',
+                }}
+              >
+                {activeChatTitle}
+              </span>
+            </div>
 
             {/* New chat */}
             <motion.button
-              onClick={() => { setMessages([GREETING]); setShowHistory(false) }}
+              onClick={() => {
+                setMessages([GREETING])
+                setActiveHistoryId('current')
+                setShowHistory(false)
+              }}
               whileHover={{ scale: 1.08 }} whileTap={{ scale: 0.94 }}
               title="New chat"
               style={headerIconBtn(false)}
@@ -1154,7 +1973,7 @@ export function ChatPanel({ mode, orientation = 'sidebar', onOrientationChange, 
                               color: active ? '#111' : '#333',
                               fontSize: 13, cursor: 'pointer',
                               display: 'flex', alignItems: 'center', gap: 9,
-                              fontWeight: active ? 500 : 400,
+                              fontWeight: 400,
                               textAlign: 'left',
                             }}
                           >
@@ -1169,15 +1988,22 @@ export function ChatPanel({ mode, orientation = 'sidebar', onOrientationChange, 
               </div>
             )}
 
-            {/* Close */}
+            {/* Side-by-side: chevron = hide chat; otherwise close exits fullscreen chat */}
             {onClose && (
               <motion.button
-                onClick={onClose}
+                type="button"
+                onClick={handleChatHeaderClose}
                 whileHover={{ scale: 1.08 }} whileTap={{ scale: 0.94 }}
-                title="Close"
-                style={headerIconBtn(false)}
+                title={chatHeaderHideColumnUi ? 'Hide chat' : 'Close'}
+                aria-label={chatHeaderHideColumnUi ? 'Hide chat' : 'Close'}
+                style={
+                  chatHeaderHideColumnUi ? headerIconBtnSideBySide(false) : headerIconBtn(false)
+                }
               >
-                <Icon name="close" size={18} />
+                <Icon
+                  name={chatHeaderHideColumnUi ? 'keyboard_double_arrow_right' : 'close'}
+                  size={18}
+                />
               </motion.button>
             )}
           </>
@@ -1186,7 +2012,7 @@ export function ChatPanel({ mode, orientation = 'sidebar', onOrientationChange, 
 
       {/* Chat history overlay — copilot (sidebar) mode only; fullchat uses left sidebar */}
       <AnimatePresence>
-        {isCopilot && showHistory && (
+        {isCopilot && showHistoryUi && (
           <motion.div
             key="history"
             initial={{ x: '-100%' }}
@@ -1195,47 +2021,50 @@ export function ChatPanel({ mode, orientation = 'sidebar', onOrientationChange, 
             transition={{ type: 'spring', stiffness: 340, damping: 36 }}
             style={{
               position: 'absolute',
-              top: 44, // below header
+              top: aiCompDocked ? 40 : 44, // below header
               left: 0, right: 0, bottom: 0,
-              background: panelBg,
+              background: aiCompDocked ? AI_COMP_DOCKED.surface : panelBg,
               zIndex: 40,
               overflowY: 'auto',
               display: 'flex',
               flexDirection: 'column',
             }}
           >
-            <div style={{ padding: '8px 12px', display: 'flex', flexDirection: 'column', gap: 2 }}>
+            <div style={{ padding: aiCompDocked ? '8px 16px' : '8px 12px', display: 'flex', flexDirection: 'column', gap: 2 }}>
               {CHAT_HISTORY.map((chat, i) => (
                 <motion.button
                   key={chat.id}
                   initial={{ opacity: 0, y: 6 }}
                   animate={{ opacity: 1, y: 0 }}
                   transition={{ delay: i * 0.04 }}
-                  onClick={() => setShowHistory(false)}
+                  onClick={() => {
+                    setActiveHistoryId(chat.id)
+                    setShowHistory(false)
+                  }}
                   style={{
                     width: '100%',
                     padding: '8px 10px',
                     borderRadius: 5,
                     border: 'none',
-                    background: chat.active ? '#f0f0f0' : 'transparent',
+                    background: chat.id === activeHistoryId ? (aiCompDocked ? '#ebe8e4' : '#f0f0f0') : 'transparent',
                     cursor: 'pointer',
                     textAlign: 'left',
                     transition: 'background 0.12s',
                   }}
                   onMouseEnter={(e) => {
-                    if (!chat.active) (e.currentTarget as HTMLElement).style.background = '#f7f7f7'
+                    if (chat.id !== activeHistoryId) (e.currentTarget as HTMLElement).style.background = aiCompDocked ? '#f5f3f0' : '#f7f7f7'
                   }}
                   onMouseLeave={(e) => {
-                    if (!chat.active) (e.currentTarget as HTMLElement).style.background = 'transparent'
+                    if (chat.id !== activeHistoryId) (e.currentTarget as HTMLElement).style.background = 'transparent'
                   }}
                 >
                   <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 2 }}>
-                    <span style={{ fontSize: 12.5, fontWeight: chat.active ? 500 : 400, color: '#111' }}>
+                    <span style={{ fontSize: 12.5, fontWeight: 400, color: aiCompDocked ? AI_COMP_DOCKED.ink : '#111' }}>
                       {chat.title}
                     </span>
-                    <span style={{ fontSize: 10, color: '#bbb' }}>{chat.date}</span>
+                    <span style={{ fontSize: 10, color: aiCompDocked ? AI_COMP_DOCKED.muted : '#bbb' }}>{chat.date}</span>
                   </div>
-                  <div style={{ fontSize: 11, color: '#999', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                  <div style={{ fontSize: 11, color: aiCompDocked ? AI_COMP_DOCKED.muted : '#999', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
                     {chat.preview}
                   </div>
                 </motion.button>
@@ -1251,23 +2080,27 @@ export function ChatPanel({ mode, orientation = 'sidebar', onOrientationChange, 
         style={{
           flex: 1,
           overflowY: 'auto',
-          background: panelBg,
+          background: aiCompDocked ? AI_COMP_DOCKED.surface : panelBg,
         }}
       >
-        {/* Inner column — capped at 730px in fullchat */}
-        <div style={{
-          maxWidth: isFullChat ? 730 : 'none',
-          margin: isFullChat ? '0 auto' : undefined,
-          padding: isFullChat ? '40px 16px' : '16px 14px',
+        {/* Inner column — capped at 730px in fullchat; 16px horizontal inset matches 448px mock (416 content). */}
+        <div
+          className="chat-message-thread"
+          style={{
+          maxWidth: isFullChat && !showWorkflowPanel && !showSchedulePanel ? 730 : 'none',
+          margin: isFullChat && !showWorkflowPanel && !showSchedulePanel ? '0 auto' : undefined,
+          padding: isFullChat ? (showWorkflowPanel || showSchedulePanel ? '40px 14px' : '40px 16px') : aiCompDocked ? '16px 16px' : '16px 14px',
           display: 'flex',
           flexDirection: 'column',
-          gap: 24,
-        }}>
+          gap: aiCompDocked ? 16 : 24,
+          overflowX: isFullChat ? 'visible' : undefined,
+        }}
+        >
         {/* ── Empty state hero ── */}
         <AnimatePresence>
           {showEmptyHero && (
             <motion.div
-              key="empty-hero"
+              key={canvasDashboardEditHero ? 'empty-hero-edit' : canvasDashboardHero ? 'empty-hero-canvas' : 'empty-hero'}
               initial={{ opacity: 0, y: 10 }}
               animate={{ opacity: 1, y: 0 }}
               exit={{ opacity: 0, y: -6, transition: { duration: 0.15 } }}
@@ -1286,58 +2119,197 @@ export function ChatPanel({ mode, orientation = 'sidebar', onOrientationChange, 
               {/* Logo + title */}
               <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 10 }}>
                 <img src="/rippling-ai.png" width={36} height={36} style={{ opacity: 0.85 }} />
-                <span style={{ fontSize: 16, fontWeight: 600, color: '#111', letterSpacing: '-0.2px' }}>
-                  Rippling AI
+                <span style={{ fontSize: 16, fontWeight: 600, fontFamily: 'var(--font-heading)', color: '#111', letterSpacing: '-0.2px', textAlign: 'center', maxWidth: '100%', padding: '0 12px' }}>
+                  {canvasDashboardHero ? 'Rippling AI' : activeChatTitle}
                 </span>
-                <span style={{ fontSize: 12.5, color: '#aaa', textAlign: 'center', lineHeight: 1.5 }}>
-                  Ask me anything about your work
+                <span style={{
+                  fontSize: 12,
+                  fontWeight: 300,
+                  fontFamily: 'var(--font-heading)',
+                  color: aiCompDocked ? AI_COMP_DOCKED.muted : '#aaa',
+                  textAlign: 'center',
+                  lineHeight: 1.5,
+                }}
+                >
+                  {canvasDashboardEditHero
+                    ? "Let's work on your dashboard"
+                    : canvasDashboardHero
+                      ? 'Ask me anything about this dashboard'
+                      : 'Ask me anything about your work'}
                 </span>
               </div>
 
-              {/* Sample prompts */}
+              {/* Sample prompts — canvas view-mode CTA vs edit-mode prompts vs default */}
               <div style={{ display: 'flex', flexDirection: 'column', gap: 8, width: '100%', maxWidth: 280 }}>
-                {[
-                  'How do I update my W2',
-                  'What will it cost me to visit the doctor',
-                  'When does my PTO reset',
-                  'Show me my recent pay stubs',
-                ].map((prompt) => (
-                  <button
-                    key={prompt}
-                    onClick={() => sendMessage(prompt)}
-                    style={{
-                      width: '100%',
-                      textAlign: 'left',
-                      padding: '9px 14px',
-                      borderRadius: 8,
-                      border: '1px solid var(--grey-200)',
-                      background: '#ffffff',
-                      color: '#333',
-                      fontSize: 12.5,
-                      cursor: 'pointer',
-                      fontFamily: 'inherit',
-                      lineHeight: 1.4,
-                      boxShadow: '0 1px 2px rgba(0,0,0,0.06)',
-                      transition: 'background 0.1s, border-color 0.1s',
-                    }}
-                    onMouseEnter={(e) => {
-                      (e.currentTarget as HTMLElement).style.background = 'var(--grey-50)'
-                      ;(e.currentTarget as HTMLElement).style.borderColor = 'var(--grey-300)'
-                    }}
-                    onMouseLeave={(e) => {
-                      (e.currentTarget as HTMLElement).style.background = '#ffffff'
-                      ;(e.currentTarget as HTMLElement).style.borderColor = 'var(--grey-200)'
-                    }}
-                  >
-                    {prompt}
-                  </button>
-                ))}
+                {canvasDashboardHero && onOpenDashboardEditMode ? (
+                  <div style={{ display: 'flex', flexDirection: 'row', gap: 8, width: '100%' }}>
+                    <button
+                      type="button"
+                      onClick={() => onOpenDashboardEditMode()}
+                      style={{
+                        flex: 1,
+                        textAlign: 'center',
+                        padding: '10px 12px',
+                        borderRadius: 8,
+                        border: '1px solid var(--grey-200)',
+                        background: '#ffffff',
+                        color: '#333',
+                        fontSize: 12,
+                        fontWeight: 500,
+                        cursor: 'pointer',
+                        fontFamily: 'inherit',
+                        lineHeight: 1.4,
+                        boxShadow: '0 1px 2px rgba(0,0,0,0.06)',
+                        transition: 'background 0.1s, border-color 0.1s',
+                      }}
+                      onMouseEnter={(e) => {
+                        (e.currentTarget as HTMLElement).style.background = 'var(--grey-50)'
+                      }}
+                      onMouseLeave={(e) => {
+                        (e.currentTarget as HTMLElement).style.background = '#ffffff'
+                      }}
+                    >
+                      Edit
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => sendMessage('Summarize this dashboard')}
+                      style={{
+                        flex: 1,
+                        textAlign: 'center',
+                        padding: '10px 12px',
+                        borderRadius: 8,
+                        border: '1px solid var(--grey-200)',
+                        background: '#ffffff',
+                        color: '#333',
+                        fontSize: 12,
+                        fontWeight: 500,
+                        cursor: 'pointer',
+                        fontFamily: 'inherit',
+                        lineHeight: 1.4,
+                        boxShadow: '0 1px 2px rgba(0,0,0,0.06)',
+                        transition: 'background 0.1s, border-color 0.1s',
+                      }}
+                      onMouseEnter={(e) => {
+                        (e.currentTarget as HTMLElement).style.background = 'var(--grey-50)'
+                      }}
+                      onMouseLeave={(e) => {
+                        (e.currentTarget as HTMLElement).style.background = '#ffffff'
+                      }}
+                    >
+                      Summarize
+                    </button>
+                  </div>
+                ) : canvasDashboardEditHero ? (
+                  [
+                    'explain the dashboard',
+                    'update the last report',
+                    'change the visual layout',
+                  ].map((prompt) => (
+                    <button
+                      key={prompt}
+                      onClick={() => sendMessage(prompt)}
+                      style={{
+                        width: '100%',
+                        textAlign: 'left',
+                        padding: '9px 14px',
+                        borderRadius: 8,
+                        border: '1px solid var(--grey-200)',
+                        background: '#ffffff',
+                        color: '#333',
+                        fontSize: 12,
+                        fontWeight: 100,
+                        cursor: 'pointer',
+                        fontFamily: 'inherit',
+                        lineHeight: 1.4,
+                        boxShadow: '0 1px 2px rgba(0,0,0,0.06)',
+                        transition: 'background 0.1s, border-color 0.1s',
+                      }}
+                      onMouseEnter={(e) => {
+                        (e.currentTarget as HTMLElement).style.background = 'var(--grey-50)'
+                        ;(e.currentTarget as HTMLElement).style.borderColor = 'var(--grey-300)'
+                      }}
+                      onMouseLeave={(e) => {
+                        (e.currentTarget as HTMLElement).style.background = '#ffffff'
+                        ;(e.currentTarget as HTMLElement).style.borderColor = 'var(--grey-200)'
+                      }}
+                    >
+                      {prompt}
+                    </button>
+                  ))
+                ) : (
+                  [
+                    'How do I update my W2',
+                    'What will it cost me to visit the doctor',
+                    'When does my PTO reset',
+                    'Show me my recent pay stubs',
+                  ].map((prompt) => (
+                    <button
+                      key={prompt}
+                      onClick={() => sendMessage(prompt)}
+                      style={{
+                        width: '100%',
+                        textAlign: 'left',
+                        padding: '9px 14px',
+                        borderRadius: 8,
+                        border: '1px solid var(--grey-200)',
+                        background: '#ffffff',
+                        color: '#333',
+                        fontSize: 12,
+                        fontWeight: 100,
+                        cursor: 'pointer',
+                        fontFamily: 'inherit',
+                        lineHeight: 1.4,
+                        boxShadow: '0 1px 2px rgba(0,0,0,0.06)',
+                        transition: 'background 0.1s, border-color 0.1s',
+                      }}
+                      onMouseEnter={(e) => {
+                        (e.currentTarget as HTMLElement).style.background = 'var(--grey-50)'
+                        ;(e.currentTarget as HTMLElement).style.borderColor = 'var(--grey-300)'
+                      }}
+                      onMouseLeave={(e) => {
+                        (e.currentTarget as HTMLElement).style.background = '#ffffff'
+                        ;(e.currentTarget as HTMLElement).style.borderColor = 'var(--grey-200)'
+                      }}
+                    >
+                      {prompt}
+                    </button>
+                  ))
+                )}
               </div>
             </motion.div>
           )}
         </AnimatePresence>
 
         {messages.filter((msg) => !(showEmptyHero && msg.id === 0)).map((msg) => {
+          // ── Figma / resource link attachment row ──
+          if (msg.type === 'figma-link-card') {
+            const m = msg as FigmaLinkCardMessage
+            return (
+              <motion.div
+                key={msg.id}
+                initial={isMounted.current ? { opacity: 0, y: 8 } : false}
+                animate={{ opacity: 1, y: 0 }}
+                transition={{ type: 'spring', stiffness: 400, damping: 30 }}
+                style={{
+                  display: 'flex',
+                  flexDirection: 'column',
+                  alignItems: 'flex-start',
+                  width: '100%',
+                  maxWidth: isFullChat ? (showWorkflowPanel || showSchedulePanel ? '100%' : 680) : '88%',
+                }}
+              >
+                <FigmaLinkAttachmentCard
+                  url={m.url}
+                  title={m.title}
+                  subtitle={m.subtitle}
+                  aiCompDocked={aiCompDocked}
+                  onOpenShellSplit={onOpenScheduleShellSplit}
+                />
+              </motion.div>
+            )
+          }
+
           // ── Report-created action card ──
           if (msg.type === 'report-created') {
             return (
@@ -1350,15 +2322,122 @@ export function ChatPanel({ mode, orientation = 'sidebar', onOrientationChange, 
                 <ReportCreatedCard
                   title={(msg as ReportCreatedMessage).title}
                   onOpen={() => {
-                    if (isFullChat) {
-                      setShowReportPanel(true)
-                    } else {
-                      // From sidebar: go fullscreen first, then open report once there
-                      setPendingReportOpen(true)
-                      onOrientationChange?.('fullscreen')
-                    }
+                    hideReportSplit()
+                    onOpenReportCreatedPage?.()
                   }}
                 />
+              </motion.div>
+            )
+          }
+
+          if (msg.type === 'schedule-preview') {
+            const openScheduleSplit = () => {
+              setShowReportPanel(false)
+              setShowWorkflowPanel(false)
+              setChatHiddenBesideSplit(false)
+              if (isFullChat) {
+                setShowSchedulePanel(true)
+              } else if (aiCompDocked) {
+                onOrientationChange?.('fullscreen')
+                setShowSchedulePanel(true)
+              }
+            }
+            const clickable = isFullChat || aiCompDocked
+            return (
+              <motion.div
+                key={msg.id}
+                initial={isMounted.current ? { opacity: 0, y: 8 } : false}
+                animate={{ opacity: 1, y: 0 }}
+                transition={{ type: 'spring', stiffness: 400, damping: 30 }}
+              >
+                {clickable ? (
+                  <button
+                    type="button"
+                    onClick={openScheduleSplit}
+                    title="Open schedule beside chat"
+                    style={{
+                      margin: 0,
+                      padding: 0,
+                      border: 'none',
+                      background: 'transparent',
+                      cursor: 'pointer',
+                      borderRadius: 12,
+                      display: 'block',
+                      width: '100%',
+                      maxWidth: 360,
+                      textAlign: 'left',
+                      font: 'inherit',
+                      transition: 'box-shadow 0.2s ease',
+                    }}
+                    onMouseEnter={(e) => {
+                      ;(e.currentTarget as HTMLButtonElement).style.boxShadow =
+                        '0 8px 28px rgba(0, 0, 0, 0.12), 0 2px 8px rgba(0, 0, 0, 0.06)'
+                    }}
+                    onMouseLeave={(e) => {
+                      ;(e.currentTarget as HTMLButtonElement).style.boxShadow = 'none'
+                    }}
+                  >
+                    <SchedulePreviewArtifact fluid />
+                  </button>
+                ) : (
+                  <SchedulePreviewArtifact fluid />
+                )}
+              </motion.div>
+            )
+          }
+
+          if (msg.type === 'workflow-preview') {
+            const openWorkflowSplit = () => {
+              setShowReportPanel(false)
+              setShowSchedulePanel(false)
+              setChatHiddenBesideSplit(false)
+              if (isFullChat) {
+                setShowWorkflowPanel(true)
+              } else if (aiCompDocked) {
+                onOrientationChange?.('fullscreen')
+                setShowWorkflowPanel(true)
+              }
+            }
+            const clickable = isFullChat || aiCompDocked
+            return (
+              <motion.div
+                key={msg.id}
+                initial={isMounted.current ? { opacity: 0, y: 8 } : false}
+                animate={{ opacity: 1, y: 0 }}
+                transition={{ type: 'spring', stiffness: 400, damping: 30 }}
+              >
+                {clickable ? (
+                  <button
+                    type="button"
+                    onClick={openWorkflowSplit}
+                    title="Open workflow canvas beside chat"
+                    style={{
+                      margin: 0,
+                      padding: 0,
+                      border: 'none',
+                      background: 'transparent',
+                      cursor: 'pointer',
+                      borderRadius: 12,
+                      display: 'block',
+                      width: '100%',
+                      maxWidth: 360,
+                      textAlign: 'left',
+                      font: 'inherit',
+                      transition: 'box-shadow 0.2s ease',
+                    }}
+                    onMouseEnter={(e) => {
+                      ;(e.currentTarget as HTMLButtonElement).style.boxShadow =
+                        '0 8px 28px rgba(0, 0, 0, 0.12), 0 2px 8px rgba(0, 0, 0, 0.06)'
+                    }}
+                    onMouseLeave={(e) => {
+                      ;(e.currentTarget as HTMLButtonElement).style.boxShadow = 'none'
+                    }}
+                  >
+                    <WorkflowPreviewArtifact fluid />
+                  </button>
+                ) : (
+                  <WorkflowPreviewArtifact fluid />
+                )}
               </motion.div>
             )
           }
@@ -1366,20 +2445,83 @@ export function ChatPanel({ mode, orientation = 'sidebar', onOrientationChange, 
           // ── Artifact messages ──
           const isArtifact = msg.type === 'table-sm' || msg.type === 'table-lg' || msg.type === 'dashboard' || msg.type === 'candidate' || msg.type === 'expense' || msg.type === 'chart'
           if (isArtifact) {
-            // table-lg breaks out to full container width in fullchat (wide data needs room)
+            // table-lg + column chart break out to viewport width in fullchat (matches Figma 760px chart frame)
             const isComplexTable = msg.type === 'table-lg'
+            const isWideColumnChart =
+              isFullChat &&
+              msg.type === 'chart' &&
+              (msg as ChartMessage).presetId === 'bar-vertical'
+            const artifactFullBleed = (isFullChat && isComplexTable) || isWideColumnChart
             return (
               <motion.div
                 key={msg.id}
                 initial={isMounted.current ? { opacity: 0, y: 8 } : false}
                 animate={{ opacity: 1, y: 0 }}
                 transition={{ type: 'spring', stiffness: 400, damping: 30 }}
-                style={isFullChat && isComplexTable ? {
-                  marginLeft: 'calc(-1 * max(0px, calc(50vw - 365px - 16px)))',
-                  marginRight: 'calc(-1 * max(0px, calc(50vw - 365px - 16px)))',
-                } : {}}
+                style={
+                  artifactFullBleed
+                    ? {
+                        marginLeft: 'calc(-1 * max(0px, calc(50vw - 365px - 16px)))',
+                        marginRight: 'calc(-1 * max(0px, calc(50vw - 365px - 16px)))',
+                        ...(isWideColumnChart
+                          ? {
+                              width: 'min(100vw - 32px, 1200px)',
+                              maxWidth: 'min(100vw - 32px, 1200px)',
+                              alignSelf: 'center',
+                            }
+                          : {}),
+                      }
+                    : {}
+                }
               >
-                {msg.type === 'chart'     && <ChartCard title={(msg as ChartMessage).title} data={(msg as ChartMessage).data} />}
+                {msg.type === 'chart' &&
+                  (() => {
+                    const pid = (msg as ChartMessage).presetId
+                    const chart = <ChartArtifactByPreset presetId={pid} fluid />
+                    const openReport = () => {
+                      setShowWorkflowPanel(false)
+                      setShowSchedulePanel(false)
+                      if (isFullChat) {
+                        setShowReportPanel(true)
+                      } else if (aiCompDocked) {
+                        /** Side-by-side needs full-width stage — enter full-screen chat, then open the report rail. */
+                        onOrientationChange?.('fullscreen')
+                        setShowReportPanel(true)
+                      } else {
+                        onOpenReportInEditMode?.()
+                      }
+                    }
+                    const clickable = isFullChat || aiCompDocked || Boolean(onOpenReportInEditMode)
+                    if (!clickable) return chart
+                    return (
+                      <button
+                        type="button"
+                        onClick={openReport}
+                        title="Open report in edit mode"
+                        style={{
+                          margin: 0,
+                          padding: 0,
+                          border: 'none',
+                          background: 'transparent',
+                          cursor: 'pointer',
+                          borderRadius: 10,
+                          display: 'block',
+                          width: '100%',
+                          textAlign: 'left',
+                          font: 'inherit',
+                          transition: 'box-shadow 0.15s ease',
+                        }}
+                        onMouseEnter={(e) => {
+                          ;(e.currentTarget as HTMLButtonElement).style.boxShadow = '0 0 0 2px rgba(122, 0, 93, 0.22)'
+                        }}
+                        onMouseLeave={(e) => {
+                          ;(e.currentTarget as HTMLButtonElement).style.boxShadow = 'none'
+                        }}
+                      >
+                        {chart}
+                      </button>
+                    )
+                  })()}
                 {msg.type === 'table-sm'  && <TableSmallArtifact cw={cw} />}
                 {msg.type === 'table-lg'  && <TableLargeArtifact cw={cw} />}
                 {msg.type === 'dashboard' && <DashboardArtifact  cw={cw} />}
@@ -1404,17 +2546,26 @@ export function ChatPanel({ mode, orientation = 'sidebar', onOrientationChange, 
             >
               <div
                 style={{
-                  maxWidth: isFullChat ? 680 : '88%',
-                  padding: msg.role === 'user' ? '9px 14px' : '0',
-                  borderRadius: msg.role === 'user' ? 20 : 0,
-                  background: msg.role === 'user' ? '#f0f0f0' : 'transparent',
-                  color: '#111',
+                  maxWidth: isFullChat ? (showWorkflowPanel || showSchedulePanel ? '100%' : 680) : '88%',
+                  padding: msg.role === 'user' ? (aiCompDocked ? '10px 14px' : '9px 14px') : '0',
+                  borderRadius: msg.role === 'user' ? (aiCompDocked ? 12 : 20) : 0,
+                  background: msg.role === 'user' ? (aiCompDocked ? AI_COMP_DOCKED.userBubble : '#f0f0f0') : 'transparent',
+                  color:
+                    msg.role === 'user' && aiCompDocked
+                      ? AI_COMP_DOCKED.ink
+                      : '#111',
                   fontSize: 14,
+                  fontWeight: 'inherit',
+                  fontFamily: 'inherit',
+                  fontSynthesis: 'inherit',
                   lineHeight: '20px',
                   whiteSpace: 'pre-wrap',
                 }}
               >
-                {(msg as TextMessage).text}
+                {formatChatMessageText((msg as TextMessage).text, {
+                  isUser: msg.role === 'user',
+                  aiCompDocked,
+                })}
               </div>
             </motion.div>
           )
@@ -1449,9 +2600,9 @@ export function ChatPanel({ mode, orientation = 'sidebar', onOrientationChange, 
                 border: '1px solid #e4e4e4',
                 background: '#fafafa',
                 color: '#555',
-                fontSize: 12.5,
+                fontSize: 12,
                 cursor: 'pointer',
-                fontWeight: 400,
+                fontWeight: 100,
                 fontFamily: 'inherit',
               }}
             >
@@ -1464,171 +2615,209 @@ export function ChatPanel({ mode, orientation = 'sidebar', onOrientationChange, 
       {/* Input */}
       <div
         style={{
-          padding: isFullChat ? '8px 16px 16px' : '10px 14px',
-          borderTop: isFullChat ? 'none' : '1px solid #e8e8e8',
-          background: panelBg,
+          padding: isFullChat ? '8px 16px 16px' : aiCompDocked ? '12px 16px' : '10px 14px',
+          borderTop: isFullChat || aiCompDocked ? 'none' : '1px solid #e8e8e8',
+          background: aiCompDocked ? AI_COMP_DOCKED.surface : panelBg,
           flexShrink: 0,
           transition: 'padding 0.3s',
-          maxWidth: isFullChat ? 730 : 'none',
-          margin: isFullChat ? '0 auto' : undefined,
+          maxWidth: isFullChat && !showWorkflowPanel && !showSchedulePanel ? 730 : 'none',
+          margin: isFullChat && !showWorkflowPanel && !showSchedulePanel ? '0 auto' : undefined,
           width: isFullChat ? '100%' : undefined,
           boxSizing: 'border-box',
+          position: 'relative',
         }}
       >
-        {isFullChat ? (
-          /* ── Full-screen elevated input card ── */
-          <div style={{
-            background: '#fafafa',
-            borderRadius: 18,
-            border: '1px solid #e0e0e0',
-            boxShadow: '0 6px 32px rgba(0,0,0,0.09), 0 1px 6px rgba(0,0,0,0.05)',
-          }}>
-            <textarea
-              value={input}
-              onChange={(e) => setInput(e.target.value)}
-              onKeyDown={(e) => {
-                if (e.key === 'Enter' && !e.shiftKey) {
-                  e.preventDefault()
-                  sendMessage(input)
-                }
-              }}
-              placeholder="Ask anything"
-              rows={3}
-              style={{
-                width: '100%',
-                background: 'transparent',
-                border: 'none',
-                outline: 'none',
-                resize: 'none',
-                fontSize: 15,
-                color: '#111',
-                padding: '18px 18px 4px',
-                fontFamily: 'inherit',
-                lineHeight: 1.6,
-                boxSizing: 'border-box',
-                display: 'block',
-              }}
-            />
-            <div style={{
-              display: 'flex', alignItems: 'center', justifyContent: 'space-between',
-              padding: '6px 12px 12px',
-            }}>
-              <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
-                <button style={{
-                  width: 28, height: 28, borderRadius: 7,
-                  border: '1px solid #e0e0e0', background: '#fff',
-                  display: 'flex', alignItems: 'center', justifyContent: 'center',
-                  cursor: 'pointer', color: '#555', fontSize: 17, lineHeight: 1,
-                }}>+</button>
-                <button style={{
-                  height: 28, padding: '0 10px', borderRadius: 7,
-                  border: '1px solid #e0e0e0', background: '#fff',
-                  cursor: 'pointer', color: '#555', fontSize: 12, fontWeight: 500,
-                  display: 'flex', alignItems: 'center', gap: 4, fontFamily: 'inherit',
-                }}>
-                  Pro
-                  <svg width={9} height={9} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2.5}><polyline points="6 9 12 15 18 9"/></svg>
-                </button>
-              </div>
-              <motion.button
-                onClick={() => sendMessage(input)}
-                whileHover={input.trim() ? { scale: 1.05 } : {}}
-                whileTap={input.trim() ? { scale: 0.95 } : {}}
+        {mentionOpen && (
+          <div
+            role="listbox"
+            aria-label="Chart artifacts"
+            style={{
+              position: 'absolute',
+              left: isFullChat ? 16 : 14,
+              right: isFullChat ? 16 : 14,
+              bottom: '100%',
+              marginBottom: 6,
+              maxHeight: 220,
+              overflowY: 'auto',
+              background: '#fff',
+              border: '1px solid var(--grey-200)',
+              borderRadius: 8,
+              boxShadow: '0 4px 24px rgba(0,0,0,0.12)',
+              zIndex: 50,
+            }}
+          >
+            <div style={{ padding: '8px 10px', fontSize: 10, fontWeight: 400, color: '#888', textTransform: 'uppercase', letterSpacing: '0.04em' }}>
+              Charts · type @ in the message
+            </div>
+            {filterChartPresets(mentionQuery).map((p) => (
+              <button
+                key={p.id}
+                type="button"
+                role="option"
+                onMouseDown={(e) => e.preventDefault()}
+                onClick={() => insertChartMention(p.id)}
                 style={{
-                  width: 34, height: 34, borderRadius: 10, border: 'none',
-                  background: input.trim() ? '#111' : '#e8e8e8',
-                  color: input.trim() ? '#fff' : '#aaa',
-                  cursor: input.trim() ? 'pointer' : 'default',
-                  display: 'flex', alignItems: 'center', justifyContent: 'center',
-                  transition: 'background 0.2s', flexShrink: 0,
+                  width: '100%',
+                  textAlign: 'left',
+                  padding: '10px 12px',
+                  border: 'none',
+                  borderTop: '1px solid var(--grey-100)',
+                  background: 'transparent',
+                  cursor: 'pointer',
+                  fontFamily: 'inherit',
                 }}
               >
-                <Icon name="send" size={14} />
-              </motion.button>
-            </div>
+                <div style={{ fontSize: 13, fontWeight: 400, color: '#111' }}>{p.title}</div>
+                <div style={{ fontSize: 11, color: '#999', marginTop: 2 }}>{p.description}</div>
+              </button>
+            ))}
+            {filterChartPresets(mentionQuery).length === 0 && (
+              <div style={{ padding: '12px 14px', fontSize: 12, color: '#999' }}>No charts match “{mentionQuery}”.</div>
+            )}
           </div>
-        ) : (
-          /* ── Compact sidebar / copilot input (see AIComposerInput) ── */
-          <AIComposerInput
-            value={input}
-            onChange={setInput}
-            onSend={() => sendMessage(input)}
-            placeholder="Message AI…"
-          />
         )}
+        <AIComposerInput
+          ref={composerFieldRef}
+          variant={isFullChat ? 'fullscreen' : 'pane'}
+          value={input}
+          onChange={setInput}
+          onCaretActivity={handleComposerCaret}
+          onSend={() => sendMessage(input)}
+          style={
+            isFullChat
+              ? { maxWidth: 712, width: '100%', margin: '0 auto' }
+              : undefined
+          }
+        />
 
-        {/* Footer note */}
+        {/* Footer note — docked mock uses single 11px disclaimer (Figma 267:16276). */}
         <p style={{
-          margin: isFullChat ? '8px 0 0' : '6px 2px 0',
+          margin: isFullChat ? '8px 0 0' : '8px 0 0',
           fontSize: 11,
-          color: 'rgba(0,0,0,0.35)',
+          fontWeight: 'var(--chat-composer-font-weight)',
+          fontFamily: 'var(--font-composer)',
+          fontSynthesis: 'none',
+          color: aiCompDocked ? AI_COMP_DOCKED.ink : 'rgba(0,0,0,0.35)',
           lineHeight: '14px',
           textAlign: 'center',
         }}>
-          Rippling AI results may be inaccurate. Review before acting.
+          {aiCompDocked ? (
+            'Rippling AI results may be inaccurate. Review before acting.'
+          ) : (
+            <>
+              Type <strong style={{ fontWeight: 300, fontFamily: 'var(--font-heading)', color: 'rgba(0,0,0,0.55)' }}>@</strong> to insert a chart artifact. Rippling AI results may be inaccurate. Review before acting.
+            </>
+          )}
         </p>
       </div>
-      </div>{/* end center column */}
+      </motion.div>
 
-      {/* ── RIGHT: Report panel (fullchat mode only) ── */}
+      {/* ── RIGHT: Report builder or Workflow canvas + resize grip ── */}
       <AnimatePresence>
-        {isFullChat && showReportPanel && (
+        {splitReportWithChat && (showReportPanel || showWorkflowPanel || showSchedulePanel) && (
           <motion.div
-            key="report-panel"
-            initial={{ width: 0, opacity: 0 }}
-            animate={{ width: '50%', opacity: 1 }}
-            exit={{ width: 0, opacity: 0 }}
-            transition={{ type: 'spring', stiffness: 380, damping: 38 }}
+            key={
+              showSchedulePanel
+                ? 'schedule-split-rail'
+                : showWorkflowPanel
+                  ? 'workflow-split-rail'
+                  : 'report-split-rail'
+            }
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            transition={
+              reportSplitDragging
+                ? { duration: 0 }
+                : { type: 'spring', stiffness: 380, damping: 38 }
+            }
             style={{
-              flexShrink: 0, overflow: 'hidden',
-              borderLeft: '1px solid var(--grey-200)',
+              flex: '1 1 0%',
+              flexShrink: 1,
+              minWidth: `${SIDE_BY_SIDE_CANVAS_MIN_FRACTION * 100}%`,
+              overflow: 'hidden',
+              display: 'flex',
+              flexDirection: 'row',
               background: '#fff',
-              display: 'flex', flexDirection: 'column',
+              borderLeft: '1px solid var(--grey-200)',
             }}
           >
-            {/* Report panel header */}
-            <div style={{
-              height: 44, flexShrink: 0,
-              borderBottom: '1px solid var(--grey-200)',
-              display: 'flex', alignItems: 'center',
-              padding: '0 12px', gap: 4,
-            }}>
-              {/* Collapse */}
-              <motion.button
-                whileHover={{ scale: 1.08 }} whileTap={{ scale: 0.94 }}
-                onClick={() => setShowReportPanel(false)}
-                title="Collapse panel"
-                style={headerIconBtn(false)}
-              >
-                <Icon name="chevron_right" size={18} />
-              </motion.button>
-
-              {/* Open in full screen */}
-              <motion.button
-                whileHover={{ scale: 1.08 }} whileTap={{ scale: 0.94 }}
-                onClick={() => onReportFullscreen?.()}
-                title="Open in full screen"
-                style={headerIconBtn(false)}
-              >
-                <Icon name="open_in_full" size={16} />
-              </motion.button>
-
-              <div style={{ flex: 1, paddingLeft: 6 }}>
-                <span style={{ fontSize: 13, fontWeight: 500, color: '#111' }}>Q1 Payroll Report</span>
-              </div>
-
-              <span style={{ fontSize: 11, color: '#bbb', background: 'var(--grey-100)', borderRadius: 4, padding: '2px 7px', fontWeight: 500 }}>
-                Generated
-              </span>
-            </div>
-
-            {/* Report content */}
-            <div style={{ flex: 1, overflow: 'hidden' }}>
-              <ReportPanelContent />
+            {!railOnlyWorkflowOrReport && (
+              <div
+                role="separator"
+                aria-orientation="vertical"
+                aria-label="Resize chat and canvas"
+                onPointerDown={splitGripPointerDown}
+                onPointerMove={splitGripPointerMove}
+                onPointerUp={reportSplitPointerUp}
+                onPointerCancel={reportSplitPointerUp}
+                style={{
+                  flexShrink: 0,
+                  width: SPLIT_GRIP_PX,
+                  cursor: 'col-resize',
+                  touchAction: 'none',
+                  borderRight: '1px solid var(--grey-200)',
+                  alignSelf: 'stretch',
+                  background: reportSplitDragging ? 'rgba(122, 0, 93, 0.08)' : 'transparent',
+                }}
+              />
+            )}
+            <div
+              style={{
+                flex: 1,
+                minWidth: 0,
+                minHeight: 0,
+                display: 'flex',
+                flexDirection: 'column',
+                boxShadow: '-6px 0 28px rgba(0,0,0,0.08), -2px 0 10px rgba(0,0,0,0.04)',
+                zIndex: 1,
+              }}
+            >
+              {showSchedulePanel ? (
+                <ScheduleCanvasView
+                  embeddedInChatSplit
+                  suppressEmbeddedNav={Boolean(showUnifiedSplitChrome)}
+                  embeddedTitleMatchChat
+                  embeddedTitleFontSize={aiCompDocked ? 14 : 13}
+                  embeddedTitleColor={aiCompDocked ? AI_COMP_DOCKED.ink : '#111'}
+                  onClose={hideScheduleSplit}
+                  onOpenChat={
+                    chatHiddenBesideSplit ? () => setChatHiddenBesideSplit(false) : undefined
+                  }
+                />
+              ) : showWorkflowPanel ? (
+                <WorkflowCanvasView
+                  embeddedInChatSplit
+                  suppressEmbeddedNav={Boolean(showUnifiedSplitChrome)}
+                  embeddedTitleMatchChat
+                  embeddedTitleFontSize={aiCompDocked ? 14 : 13}
+                  embeddedTitleColor={aiCompDocked ? AI_COMP_DOCKED.ink : '#111'}
+                  onClose={hideWorkflowSplit}
+                  onOpenChat={
+                    chatHiddenBesideSplit ? () => setChatHiddenBesideSplit(false) : undefined
+                  }
+                />
+              ) : (
+                <ReportBuilderEditMode
+                  embeddedInChatSplit
+                  omitAvailableDataPanel={splitRailHalfHalf}
+                  suppressEmbeddedNav={Boolean(showUnifiedSplitChrome)}
+                  embeddedTitleMatchChat
+                  embeddedTitleFontSize={aiCompDocked ? 14 : 13}
+                  embeddedTitleColor={aiCompDocked ? AI_COMP_DOCKED.ink : '#111'}
+                  onClose={hideReportSplit}
+                  onRequestFullscreen={() => {
+                    hideReportSplit()
+                    onReportFullscreen?.()
+                  }}
+                />
+              )}
             </div>
           </motion.div>
         )}
       </AnimatePresence>
+        </div>{/* end split inner row */}
+      </div>{/* end canvas column wrapper */}
 
     </div>
   )
