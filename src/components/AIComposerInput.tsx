@@ -1,4 +1,4 @@
-import React, { forwardRef, useCallback } from 'react'
+import React, { forwardRef, useCallback, useState } from 'react'
 import { motion } from 'motion/react'
 import { Icon } from './Icon'
 
@@ -21,6 +21,10 @@ export type AIComposerInputProps = {
   style?: React.CSSProperties
   /** Fired after value/caret updates (mentions, @ picker). */
   onCaretActivity?: (detail: { value: string; selectionStart: number }) => void
+  /** Context chip rendered inside the composer shell (e.g. attached artifact). Light berry surface. */
+  leadingChip?: string | null
+  /** Clear attached context (e.g. close report/workflow rail) — close control shows on chip hover when set. */
+  onLeadingChipDismiss?: () => void
 }
 
 /**
@@ -40,13 +44,17 @@ export const AIComposerInput = forwardRef<NativeField, AIComposerInputProps>(fun
     className,
     style,
     onCaretActivity,
+    leadingChip,
+    onLeadingChipDismiss,
   },
   ref,
 ) {
+  const [chipHovered, setChipHovered] = useState(false)
   const canSend = value.trim().length > 0 && !disabled && !readOnly
   const multiline = variant === 'fullscreen'
   /** Sidebar / docked chat — matches AI-components mock stroke + send treatment. */
   const paneChrome = !multiline
+  const showChip = Boolean(leadingChip?.trim())
 
   const emitCaret = useCallback(
     (el: NativeField | null, v: string) => {
@@ -65,12 +73,33 @@ export const AIComposerInput = forwardRef<NativeField, AIComposerInputProps>(fun
     width: '100%',
     display: 'flex',
     flexDirection: 'column',
-    minHeight: paneChrome ? 111 : 112,
+    minHeight: paneChrome ? (showChip ? 126 : 111) : showChip ? 128 : 112,
     fontFamily: 'var(--font-composer-field)',
     fontWeight: 'var(--ai-composer-field-weight)',
     ...(multiline
-      ? { gap: 8, justifyContent: 'flex-start' as const }
-      : { gap: 0, justifyContent: 'space-between' as const }),
+      ? { gap: showChip ? 6 : 8, justifyContent: 'flex-start' as const }
+      : showChip
+        ? { gap: 6, justifyContent: 'flex-start' as const }
+        : { gap: 0, justifyContent: 'space-between' as const }),
+  }
+
+  /** Primary-variant light berry — sits inside the field so it reads as context, not a prompt. */
+  const chipSurface: React.CSSProperties = {
+    display: 'inline-flex',
+    alignItems: 'center',
+    alignSelf: 'flex-start',
+    maxWidth: '100%',
+    padding: '3px 8px 3px 6px',
+    borderRadius: 999,
+    fontSize: 11,
+    lineHeight: '14px',
+    fontWeight: 500,
+    fontFamily: 'var(--font-composer)',
+    color: '#5c1466',
+    background: '#F0D0F5',
+    border: '1px solid rgba(122, 0, 93, 0.2)',
+    overflow: 'hidden',
+    minWidth: 0,
   }
 
   /** Typography for input/textarea comes from `index.css` `.ai-composer-input input` (explicit `font` + smoothing). */
@@ -120,148 +149,245 @@ export const AIComposerInput = forwardRef<NativeField, AIComposerInputProps>(fun
     flexShrink: 0,
   }
 
+  const dismissChip = onLeadingChipDismiss
+
+  const chipEl =
+    showChip ? (
+      <div
+        style={{ flexShrink: 0, width: '100%', minWidth: 0 }}
+        onMouseEnter={() => setChipHovered(true)}
+        onMouseLeave={() => setChipHovered(false)}
+      >
+        <span
+          style={{
+            ...chipSurface,
+            gap: 5,
+            ...(dismissChip ? { paddingRight: 4 } : {}),
+          }}
+        >
+          <Icon name="attach_file" size={14} style={{ opacity: 0.88, flexShrink: 0 }} aria-hidden />
+          <span
+            style={{
+              overflow: 'hidden',
+              textOverflow: 'ellipsis',
+              whiteSpace: 'nowrap',
+              minWidth: 0,
+              flex: 1,
+            }}
+          >
+            {leadingChip!.trim()}
+          </span>
+          {dismissChip && (
+            <button
+              type="button"
+              aria-label="Clear attached context"
+              title="Stop working in this context"
+              onClick={(e) => {
+                e.preventDefault()
+                e.stopPropagation()
+                dismissChip()
+              }}
+              style={{
+                flexShrink: 0,
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                width: 22,
+                height: 22,
+                margin: 0,
+                padding: 0,
+                border: 'none',
+                borderRadius: 999,
+                background: chipHovered ? 'rgba(122, 0, 93, 0.12)' : 'transparent',
+                cursor: 'pointer',
+                color: '#5c1466',
+                opacity: chipHovered ? 1 : 0,
+                pointerEvents: chipHovered ? 'auto' : 'none',
+                transition: 'opacity 0.15s ease, background 0.15s ease',
+              }}
+            >
+              <Icon name="close" size={14} aria-hidden />
+            </button>
+          )}
+        </span>
+      </div>
+    ) : null
+
+  const inputRow = (
+    <div
+      style={
+        multiline
+          ? { flex: 1, minHeight: 48, display: 'flex' }
+          : { flexShrink: 0, display: 'flex', alignItems: 'center', minHeight: 20 }
+      }
+    >
+      {multiline ? (
+        <textarea
+          ref={ref as React.Ref<HTMLTextAreaElement>}
+          value={value}
+          readOnly={readOnly}
+          onChange={(e) => {
+            onChange(e.target.value)
+            requestAnimationFrame(() => emitCaret(e.target, e.target.value))
+          }}
+          onSelect={(e) => emitCaret(e.target as HTMLTextAreaElement, value)}
+          onKeyUp={(e) => emitCaret(e.target as HTMLTextAreaElement, value)}
+          onKeyDown={(e) => {
+            if (e.key === 'Enter' && !e.shiftKey) {
+              e.preventDefault()
+              if (canSend) onSend()
+            }
+          }}
+          disabled={disabled}
+          placeholder={placeholder}
+          rows={3}
+          aria-label={placeholder}
+          style={{
+            ...inputBase,
+            flex: 1,
+            minHeight: 52,
+            display: 'block',
+            padding: 0,
+          }}
+        />
+      ) : (
+        <input
+          ref={ref as React.Ref<HTMLInputElement>}
+          value={value}
+          readOnly={readOnly}
+          onChange={(e) => {
+            onChange(e.target.value)
+            requestAnimationFrame(() => emitCaret(e.target, e.target.value))
+          }}
+          onSelect={(e) => emitCaret(e.target as HTMLInputElement, value)}
+          onKeyUp={(e) => emitCaret(e.target as HTMLInputElement, value)}
+          onKeyDown={(e) => {
+            if (e.key === 'Enter' && !e.shiftKey) {
+              e.preventDefault()
+              if (canSend) onSend()
+            }
+          }}
+          disabled={disabled}
+          placeholder={placeholder}
+          style={{
+            ...inputBase,
+            height: 20,
+            padding: 0,
+          }}
+        />
+      )}
+    </div>
+  )
+
+  const toolbarRow = (
+    <div
+      style={{
+        display: 'flex',
+        flexDirection: 'row',
+        alignItems: 'center',
+        gap: 8,
+        height: 32,
+        flexShrink: 0,
+      }}
+    >
+      <button type="button" aria-label="Add attachment" style={ghostIconBtn}>
+        <Icon name="add" size={20} />
+      </button>
+      <button type="button" aria-label="Model speed" style={fastBtn}>
+        <Icon name="bolt" size={16} />
+        Fast
+        <Icon name="expand_more" size={16} />
+        {paneChrome && (
+          <span
+            style={{
+              minWidth: 18,
+              height: 18,
+              borderRadius: 9999,
+              background: '#1e4aa9',
+              color: '#fff',
+              fontSize: 11,
+              fontWeight: 'var(--ai-composer-medium-weight)',
+              lineHeight: '14px',
+              letterSpacing: 0,
+              display: 'inline-flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              padding: '0 5px',
+              marginLeft: 2,
+              fontFamily: 'var(--font-composer-field)',
+            }}
+          >
+            1
+          </span>
+        )}
+      </button>
+      <div style={{ flex: 1, minWidth: 0 }} />
+      <button type="button" aria-label="Voice input" style={ghostIconBtn}>
+        <Icon name="mic" size={20} />
+      </button>
+      <motion.button
+        type="button"
+        onClick={onSend}
+        disabled={!canSend}
+        whileHover={canSend ? { scale: 1.04 } : undefined}
+        whileTap={canSend ? { scale: 0.96 } : undefined}
+        aria-label="Send"
+        style={{
+          width: 32,
+          height: 32,
+          borderRadius: 6,
+          border: 'none',
+          background: canSend
+            ? (paneChrome ? '#000000' : '#7a005d')
+            : (paneChrome ? '#f2f2f2' : '#eceaee'),
+          color: canSend ? '#fff' : (paneChrome ? '#999' : '#aaa'),
+          cursor: canSend ? 'pointer' : 'default',
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'center',
+          flexShrink: 0,
+          transition: 'background 0.2s, color 0.2s',
+          padding: 0,
+        }}
+      >
+        <Icon name="send" size={18} filled={canSend} style={{ color: canSend && paneChrome ? '#ffffff' : 'inherit' }} />
+      </motion.button>
+    </div>
+  )
+
   return (
     <div
       className={['ai-composer-input', className].filter(Boolean).join(' ')}
       style={{ ...shell, ...style }}
     >
-      <div
-        style={
-          multiline
-            ? { flex: 1, minHeight: 48, display: 'flex' }
-            : { flexShrink: 0, display: 'flex', alignItems: 'center', minHeight: 20 }
-        }
-      >
-        {multiline ? (
-          <textarea
-            ref={ref as React.Ref<HTMLTextAreaElement>}
-            value={value}
-            readOnly={readOnly}
-            onChange={(e) => {
-              onChange(e.target.value)
-              requestAnimationFrame(() => emitCaret(e.target, e.target.value))
-            }}
-            onSelect={(e) => emitCaret(e.target as HTMLTextAreaElement, value)}
-            onKeyUp={(e) => emitCaret(e.target as HTMLTextAreaElement, value)}
-            onKeyDown={(e) => {
-              if (e.key === 'Enter' && !e.shiftKey) {
-                e.preventDefault()
-                if (canSend) onSend()
-              }
-            }}
-            disabled={disabled}
-            placeholder={placeholder}
-            rows={3}
-            aria-label={placeholder}
+      {multiline ? (
+        <>
+          {chipEl}
+          {inputRow}
+          {toolbarRow}
+        </>
+      ) : showChip ? (
+        <>
+          {chipEl}
+          <div
             style={{
-              ...inputBase,
               flex: 1,
-              minHeight: 52,
-              display: 'block',
-              padding: 0,
+              display: 'flex',
+              flexDirection: 'column',
+              justifyContent: 'space-between',
+              minHeight: 0,
             }}
-          />
-        ) : (
-          <input
-            ref={ref as React.Ref<HTMLInputElement>}
-            value={value}
-            readOnly={readOnly}
-            onChange={(e) => {
-              onChange(e.target.value)
-              requestAnimationFrame(() => emitCaret(e.target, e.target.value))
-            }}
-            onSelect={(e) => emitCaret(e.target as HTMLInputElement, value)}
-            onKeyUp={(e) => emitCaret(e.target as HTMLInputElement, value)}
-            onKeyDown={(e) => {
-              if (e.key === 'Enter' && !e.shiftKey) {
-                e.preventDefault()
-                if (canSend) onSend()
-              }
-            }}
-            disabled={disabled}
-            placeholder={placeholder}
-            style={{
-              ...inputBase,
-              height: 20,
-              padding: 0,
-            }}
-          />
-        )}
-      </div>
-
-      <div
-        style={{
-          display: 'flex',
-          flexDirection: 'row',
-          alignItems: 'center',
-          gap: 8,
-          height: 32,
-          flexShrink: 0,
-        }}
-      >
-        <button type="button" aria-label="Add attachment" style={ghostIconBtn}>
-          <Icon name="add" size={20} />
-        </button>
-        <button type="button" aria-label="Model speed" style={fastBtn}>
-          <Icon name="bolt" size={16} />
-          Fast
-          <Icon name="expand_more" size={16} />
-          {paneChrome && (
-            <span
-              style={{
-                minWidth: 18,
-                height: 18,
-                borderRadius: 9999,
-                background: '#1e4aa9',
-                color: '#fff',
-                fontSize: 11,
-                fontWeight: 'var(--ai-composer-medium-weight)',
-                lineHeight: '14px',
-                letterSpacing: 0,
-                display: 'inline-flex',
-                alignItems: 'center',
-                justifyContent: 'center',
-                padding: '0 5px',
-                marginLeft: 2,
-                fontFamily: 'var(--font-composer-field)',
-              }}
-            >
-              1
-            </span>
-          )}
-        </button>
-        <div style={{ flex: 1, minWidth: 0 }} />
-        <button type="button" aria-label="Voice input" style={ghostIconBtn}>
-          <Icon name="mic" size={20} />
-        </button>
-        <motion.button
-          type="button"
-          onClick={onSend}
-          disabled={!canSend}
-          whileHover={canSend ? { scale: 1.04 } : undefined}
-          whileTap={canSend ? { scale: 0.96 } : undefined}
-          aria-label="Send"
-          style={{
-            width: 32,
-            height: 32,
-            borderRadius: 6,
-            border: 'none',
-            background: canSend
-              ? (paneChrome ? '#000000' : '#7a005d')
-              : (paneChrome ? '#f2f2f2' : '#eceaee'),
-            color: canSend ? '#fff' : (paneChrome ? '#999' : '#aaa'),
-            cursor: canSend ? 'pointer' : 'default',
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'center',
-            flexShrink: 0,
-            transition: 'background 0.2s, color 0.2s',
-            padding: 0,
-          }}
-        >
-          <Icon name="send" size={18} filled={canSend} style={{ color: canSend && paneChrome ? '#ffffff' : 'inherit' }} />
-        </motion.button>
-      </div>
+          >
+            {inputRow}
+            {toolbarRow}
+          </div>
+        </>
+      ) : (
+        <>
+          {inputRow}
+          {toolbarRow}
+        </>
+      )}
     </div>
   )
 })

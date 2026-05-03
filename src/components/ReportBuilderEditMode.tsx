@@ -1,5 +1,5 @@
 import React from 'react'
-import type { CSSProperties } from 'react'
+import type { CSSProperties, ReactNode } from 'react'
 import { motion } from 'motion/react'
 import { Icon } from './Icon'
 
@@ -34,6 +34,60 @@ export type ReportBuilderEditModeProps = {
   embeddedTitleColor?: string
   /** Shown in split mode — opens full-screen report (parent should collapse the split). */
   onRequestFullscreen?: () => void
+  /** `always_right` dock: breadcrumb trail in this row beside Share / Save (unified strip hidden in chat). */
+  embeddedSplitBreadcrumbs?: ReactNode
+  /** When set (e.g. chart preset title), replaces default “People by department” so rail matches artifact. */
+  embeddedReportTitle?: string
+}
+
+const reportHeaderGhostNavBtn: CSSProperties = {
+  width: 36,
+  height: 36,
+  borderRadius: 8,
+  border: 'none',
+  background: 'transparent',
+  display: 'flex',
+  alignItems: 'center',
+  justifyContent: 'center',
+  cursor: 'pointer',
+  color: '#555',
+}
+
+const reportHeaderGhostToolbarIconBtn: CSSProperties = {
+  width: 34,
+  height: 34,
+  borderRadius: 7,
+  border: 'none',
+  background: 'transparent',
+  display: 'flex',
+  alignItems: 'center',
+  justifyContent: 'center',
+  cursor: 'pointer',
+  color: '#666',
+}
+
+const reportHeaderFilledToolbarIconBtn: CSSProperties = {
+  width: 34,
+  height: 34,
+  borderRadius: 7,
+  border: '1px solid var(--grey-200)',
+  background: '#fff',
+  display: 'flex',
+  alignItems: 'center',
+  justifyContent: 'center',
+  cursor: 'pointer',
+  color: '#666',
+}
+
+const toolbarChip: React.CSSProperties = {
+  padding: '6px 12px',
+  borderRadius: 6,
+  border: '1px solid var(--grey-200)',
+  background: '#fff',
+  fontSize: 12,
+  fontWeight: 400,
+  cursor: 'pointer',
+  color: '#333',
 }
 
 /**
@@ -49,9 +103,12 @@ export function ReportBuilderEditMode({
   embeddedTitleFontSize = 13,
   embeddedTitleColor = '#111',
   onRequestFullscreen,
+  embeddedSplitBreadcrumbs,
+  embeddedReportTitle,
 }: ReportBuilderEditModeProps) {
+  const headerReportTitle = embeddedReportTitle ?? REPORT_BUILDER_DISPLAY_NAME
   const showAvailableDataPanel = !embeddedInChatSplit || !omitAvailableDataPanel
-  const showRailNav = embeddedInChatSplit && !suppressEmbeddedNav
+  const showRailNav = embeddedInChatSplit && !suppressEmbeddedNav && !embeddedSplitBreadcrumbs
   const titleSpanStyle: CSSProperties = embeddedTitleMatchChat
     ? {
         fontSize: embeddedTitleFontSize,
@@ -144,10 +201,25 @@ export function ReportBuilderEditMode({
             <Icon name="open_in_full" size={18} />
           </motion.button>
         )}
-        <div style={{ display: 'flex', alignItems: 'center', gap: 8, flex: 1, minWidth: 0 }}>
-          <span style={titleSpanStyle}>{REPORT_BUILDER_DISPLAY_NAME}</span>
-          <Icon name="edit" size={16} style={{ color: '#888', flexShrink: 0 }} />
-        </div>
+        {embeddedSplitBreadcrumbs ? (
+          <div
+            style={{
+              flex: 1,
+              minWidth: 0,
+              display: 'flex',
+              alignItems: 'center',
+              gap: 8,
+            }}
+          >
+            <div style={{ flex: 1, minWidth: 0 }}>{embeddedSplitBreadcrumbs}</div>
+            <Icon name="edit" size={16} style={{ color: '#888', flexShrink: 0 }} />
+          </div>
+        ) : (
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8, flex: 1, minWidth: 0 }}>
+            <span style={titleSpanStyle}>{headerReportTitle}</span>
+            <Icon name="edit" size={16} style={{ color: '#888', flexShrink: 0 }} />
+          </div>
+        )}
         <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexShrink: 0 }}>
           {(['refresh', 'undo', 'redo', 'more_horiz'] as const).map((name) => (
             <button
@@ -436,54 +508,4 @@ export function ReportBuilderEditMode({
       </div>
     </div>
   )
-}
-
-const reportHeaderGhostNavBtn: CSSProperties = {
-  width: 36,
-  height: 36,
-  borderRadius: 8,
-  border: 'none',
-  background: 'transparent',
-  display: 'flex',
-  alignItems: 'center',
-  justifyContent: 'center',
-  cursor: 'pointer',
-  color: '#555',
-}
-
-const reportHeaderGhostToolbarIconBtn: CSSProperties = {
-  width: 34,
-  height: 34,
-  borderRadius: 7,
-  border: 'none',
-  background: 'transparent',
-  display: 'flex',
-  alignItems: 'center',
-  justifyContent: 'center',
-  cursor: 'pointer',
-  color: '#666',
-}
-
-const reportHeaderFilledToolbarIconBtn: CSSProperties = {
-  width: 34,
-  height: 34,
-  borderRadius: 7,
-  border: '1px solid var(--grey-200)',
-  background: '#fff',
-  display: 'flex',
-  alignItems: 'center',
-  justifyContent: 'center',
-  cursor: 'pointer',
-  color: '#666',
-}
-
-const toolbarChip: React.CSSProperties = {
-  padding: '6px 12px',
-  borderRadius: 6,
-  border: '1px solid var(--grey-200)',
-  background: '#fff',
-  fontSize: 12,
-  fontWeight: 400,
-  cursor: 'pointer',
-  color: '#333',
 }

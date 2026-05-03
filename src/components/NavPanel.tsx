@@ -16,8 +16,14 @@ interface NavPanelProps {
   background?: string
 }
 
-/** Matches AI-components sidebar rail (~Figma AI-components file). */
+/** Expanded sidebar — labels + icons (~Figma AI-components rail). */
 export const NAV_WIDTH = 264
+/** Collapsed rail — icons only (common product pattern). */
+export const NAV_WIDTH_COLLAPSED = 56
+
+export function navRailWidthPx(expanded: boolean): number {
+  return expanded ? NAV_WIDTH : NAV_WIDTH_COLLAPSED
+}
 
 type NavItem = {
   icon: string
@@ -70,7 +76,7 @@ function sectionLabel(text: string) {
 
 export function NavPanel({
   isOpen,
-  onToggle,
+  onToggle: _onToggle,
   activePage,
   onPageChange,
   activeSideBySide = null,
@@ -78,12 +84,14 @@ export function NavPanel({
   elevation = 'base',
   background = '#f7f7f7',
 }: NavPanelProps) {
+  const compact = !isOpen
+
   return (
     <motion.div
       animate={{
-        width: isOpen ? NAV_WIDTH : 0,
+        width: navRailWidthPx(isOpen),
         boxShadow:
-          elevation === 'shadow' && isOpen
+          elevation === 'shadow'
             ? '4px 0 24px rgba(0,0,0,0.06), 1px 0 0 rgba(0,0,0,0.04)'
             : 'none',
       }}
@@ -93,40 +101,40 @@ export function NavPanel({
         overflow: 'hidden',
         zIndex: 20,
         height: '100%',
-        borderRight: isOpen ? `1px solid ${SIDEBAR_STROKE}` : 'none',
+        borderRight: `1px solid ${SIDEBAR_STROKE}`,
       }}
     >
       <div
         style={{
-          width: NAV_WIDTH,
+          width: '100%',
           height: '100%',
           background,
           transition: 'background 0.18s ease',
           display: 'flex',
           flexDirection: 'column',
-          padding: '12px 10px 10px',
+          padding: compact ? '12px 8px 10px' : '12px 10px 10px',
           boxSizing: 'border-box',
         }}
       >
-        {sectionLabel('Views')}
+        {isOpen && sectionLabel('Views')}
 
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
+        <div style={{ display: 'flex', flexDirection: 'column', gap: compact ? 4 : 2 }}>
           {NAV_ITEMS.map(({ icon, label, page }) => {
             const isActive = activePage === page
             return (
               <button
                 key={label}
                 type="button"
-                onClick={() => {
-                  onPageChange(page)
-                  if (!isOpen) onToggle()
-                }}
+                title={label}
+                aria-label={label}
+                onClick={() => onPageChange(page)}
                 style={{
                   width: '100%',
                   display: 'flex',
                   alignItems: 'center',
-                  gap: 10,
-                  padding: '9px 10px',
+                  justifyContent: compact ? 'center' : 'flex-start',
+                  gap: compact ? 0 : 10,
+                  padding: compact ? '10px 8px' : '9px 10px',
                   borderRadius: ROW_RADIUS,
                   border: 'none',
                   background: isActive ? BRAND_FILL_ACTIVE : 'transparent',
@@ -155,7 +163,7 @@ export function NavPanel({
                     fontVariationSettings: `'FILL' ${isActive ? 1 : 0}, 'wght' 400, 'GRAD' 0, 'opsz' 20`,
                   }}
                 />
-                <span style={{ flex: 1 }}>{label}</span>
+                {!compact && <span style={{ flex: 1 }}>{label}</span>}
               </button>
             )
           })}
@@ -163,30 +171,30 @@ export function NavPanel({
 
         <div
           style={{
-            marginTop: 12,
+            marginTop: compact ? 8 : 12,
             marginBottom: 0,
-            paddingTop: 16,
+            paddingTop: compact ? 12 : 16,
             borderTop: `1px solid ${SIDEBAR_STROKE}`,
           }}
         >
-          {sectionLabel('Side by side')}
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
+          {isOpen && sectionLabel('Side by side')}
+          <div style={{ display: 'flex', flexDirection: 'column', gap: compact ? 4 : 2 }}>
             {SIDE_BY_SIDE_ITEMS.map(({ id, icon, label }) => {
               const isActive = activeSideBySide === id
               return (
                 <button
                   key={id}
                   type="button"
-                  onClick={() => {
-                    onSideBySideSelect?.(id)
-                    if (!isOpen) onToggle()
-                  }}
+                  title={label}
+                  aria-label={label}
+                  onClick={() => onSideBySideSelect?.(id)}
                   style={{
                     width: '100%',
                     display: 'flex',
                     alignItems: 'center',
-                    gap: 10,
-                    padding: '9px 10px',
+                    justifyContent: compact ? 'center' : 'flex-start',
+                    gap: compact ? 0 : 10,
+                    padding: compact ? '10px 8px' : '9px 10px',
                     borderRadius: ROW_RADIUS,
                     border: 'none',
                     background: isActive ? BRAND_FILL_ACTIVE : 'transparent',
@@ -215,7 +223,7 @@ export function NavPanel({
                       fontVariationSettings: `'FILL' ${isActive ? 1 : 0}, 'wght' 400, 'GRAD' 0, 'opsz' 20`,
                     }}
                   />
-                  <span style={{ flex: 1 }}>{label}</span>
+                  {!compact && <span style={{ flex: 1 }}>{label}</span>}
                 </button>
               )
             })}
@@ -224,28 +232,30 @@ export function NavPanel({
 
         <div style={{ flex: 1, minHeight: 8 }} />
 
-        <div
-          style={{
-            marginTop: 'auto',
-            paddingTop: 12,
-            borderTop: `1px solid ${SIDEBAR_STROKE}`,
-          }}
-        >
-          <span
+        {isOpen && (
+          <div
             style={{
-              display: 'block',
-              padding: '6px 10px',
-              fontSize: 11,
-              fontWeight: 600,
-              letterSpacing: '0.08em',
-              textTransform: 'uppercase',
-              color: TEXT_MUTED,
-              fontFamily: 'var(--font-sans)',
+              marginTop: 'auto',
+              paddingTop: 12,
+              borderTop: `1px solid ${SIDEBAR_STROKE}`,
             }}
           >
-            Workspace
-          </span>
-        </div>
+            <span
+              style={{
+                display: 'block',
+                padding: '6px 10px',
+                fontSize: 11,
+                fontWeight: 600,
+                letterSpacing: '0.08em',
+                textTransform: 'uppercase',
+                color: TEXT_MUTED,
+                fontFamily: 'var(--font-sans)',
+              }}
+            >
+              Workspace
+            </span>
+          </div>
+        )}
       </div>
     </motion.div>
   )

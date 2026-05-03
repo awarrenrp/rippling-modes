@@ -8,6 +8,7 @@ import { FlowPage }     from './pages/FlowPage'
 import { StepperPage }  from './pages/StepperPage'
 import { CanvasPage }   from './pages/CanvasPage'
 import { ScheduleCanvasView } from './ScheduleCanvasView'
+import type { ChatDockPolicy } from '@/prototypeDefaults'
 
 export type PageId = 'table' | 'dashboard' | 'settings' | 'detail' | 'flow' | 'stepper' | 'canvas'
 
@@ -35,6 +36,8 @@ interface PageContentProps {
   canvasEdgeShadow?: 'none' | 'left' | 'right' | 'ambient'
   /** Beta dashboard: transition into canvas edit + side-by-side chat. */
   onDashboardEnterEdit?: () => void
+  /** Drives canvas toolbar chrome when docked beside chat (e.g. edit vs date chips). */
+  chatDockPolicy?: ChatDockPolicy
   /** Canvas + WIW schedule beside docked chat (app shell split). */
   scheduleSplitMode?: boolean
   onCloseScheduleSplit?: () => void
@@ -46,6 +49,7 @@ export const PageContent = memo(function PageContent({
   drawerMode = 'collapse', onOpenFloating, onOpenFullscreen, onCloseMainChat,
   canvasLeftChatCollapsed, onExpandCanvasLeftChat, dashboardEditMode, canvasEdgeShadow = 'none',
   onDashboardEnterEdit,
+  chatDockPolicy = 'right_and_left',
   scheduleSplitMode,
   onCloseScheduleSplit,
 }: PageContentProps) {
@@ -97,6 +101,8 @@ export const PageContent = memo(function PageContent({
                 onExpandCanvasLeftChat={onExpandCanvasLeftChat}
                 dashboardEditMode={dashboardEditMode}
                 canvasEdgeShadow={canvasEdgeShadow}
+                chatDockPolicy={chatDockPolicy}
+                onEnterEdit={onDashboardEnterEdit}
               />
             )}
           </motion.div>

@@ -1,4 +1,4 @@
-import type { CSSProperties } from 'react'
+import type { CSSProperties, ReactNode } from 'react'
 import { motion } from 'motion/react'
 import { Icon } from './Icon'
 import { REPORT_BUILDER_HEADER_HEIGHT_PX } from './ReportBuilderEditMode'
@@ -18,6 +18,7 @@ export type ScheduleCanvasViewProps = {
   embeddedTitleMatchChat?: boolean
   embeddedTitleFontSize?: number
   embeddedTitleColor?: string
+  embeddedSplitBreadcrumbs?: ReactNode
 }
 
 const BG = '#f4f4f5'
@@ -70,8 +71,9 @@ export function ScheduleCanvasView({
   embeddedTitleMatchChat,
   embeddedTitleFontSize = 13,
   embeddedTitleColor = '#111',
+  embeddedSplitBreadcrumbs,
 }: ScheduleCanvasViewProps) {
-  const showRailBack = embeddedInChatSplit && !suppressEmbeddedNav
+  const showRailBack = embeddedInChatSplit && !suppressEmbeddedNav && !embeddedSplitBreadcrumbs
 
   return (
     <div
@@ -120,50 +122,56 @@ export function ScheduleCanvasView({
             <Icon name="close" size={18} />
           </motion.button>
         )}
-        {showRailBack && onOpenChat && (
-          <motion.button
-            type="button"
-            whileHover={{ scale: 1.05 }}
-            whileTap={{ scale: 0.96 }}
-            onClick={onOpenChat}
-            title="Show chat"
-            style={{
-              width: 36,
-              height: 36,
-              borderRadius: 8,
-              border: 'none',
-              background: CELL,
-              display: 'flex',
-              alignItems: 'center',
-              justifyContent: 'center',
-              cursor: 'pointer',
-              color: '#555',
-            }}
-          >
-            <Icon name="view_sidebar" size={18} />
-          </motion.button>
-        )}
-        <Icon name="calendar_month" size={18} style={{ color: 'var(--brand)', flexShrink: 0 }} />
-        <div style={{ flex: 1, minWidth: 0 }}>
-          <div
-            style={{
-              fontSize: embeddedTitleFontSize,
-              fontWeight: embeddedTitleMatchChat ? 400 : 600,
-              color: embeddedTitleColor,
-              letterSpacing: '-0.02em',
-              overflow: 'hidden',
-              textOverflow: 'ellipsis',
-              whiteSpace: 'nowrap',
-            }}
-          >
-            {SCHEDULE_CANVAS_DISPLAY_NAME}
-          </div>
-          {!suppressEmbeddedNav && (
-            <div style={{ fontSize: 11, color: MUTED, marginTop: 2 }}>
-              WIW migration · Cohort 3 · Weekly view
+        {embeddedSplitBreadcrumbs ? (
+          <div style={{ flex: 1, minWidth: 0 }}>{embeddedSplitBreadcrumbs}</div>
+        ) : (
+          <>
+            {showRailBack && onOpenChat && (
+              <motion.button
+                type="button"
+                whileHover={{ scale: 1.05 }}
+                whileTap={{ scale: 0.96 }}
+                onClick={onOpenChat}
+                title="Show chat"
+                style={{
+                  width: 36,
+                  height: 36,
+                  borderRadius: 8,
+                  border: 'none',
+                  background: CELL,
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  cursor: 'pointer',
+                  color: '#555',
+                }}
+              >
+                <Icon name="view_sidebar" size={18} />
+              </motion.button>
+            )}
+            <Icon name="calendar_month" size={18} style={{ color: 'var(--brand)', flexShrink: 0 }} />
+            <div style={{ flex: 1, minWidth: 0 }}>
+              <div
+                style={{
+                  fontSize: embeddedTitleFontSize,
+                  fontWeight: embeddedTitleMatchChat ? 400 : 600,
+                  color: embeddedTitleColor,
+                  letterSpacing: '-0.02em',
+                  overflow: 'hidden',
+                  textOverflow: 'ellipsis',
+                  whiteSpace: 'nowrap',
+                }}
+              >
+                {SCHEDULE_CANVAS_DISPLAY_NAME}
+              </div>
+              {!suppressEmbeddedNav && (
+                <div style={{ fontSize: 11, color: MUTED, marginTop: 2 }}>
+                  WIW migration · Cohort 3 · Weekly view
+                </div>
+              )}
             </div>
-          )}
-        </div>
+          </>
+        )}
         <span
           style={{
             fontSize: 10,

@@ -1,4 +1,4 @@
-import type { CSSProperties } from 'react'
+import type { CSSProperties, ReactNode } from 'react'
 import { motion } from 'motion/react'
 import { Icon } from './Icon'
 import { REPORT_BUILDER_HEADER_HEIGHT_PX } from './ReportBuilderEditMode'
@@ -20,6 +20,8 @@ export type WorkflowCanvasViewProps = {
   embeddedTitleMatchChat?: boolean
   embeddedTitleFontSize?: number
   embeddedTitleColor?: string
+  /** `always_right` dock: breadcrumbs beside workflow actions (unified chat strip hidden). */
+  embeddedSplitBreadcrumbs?: ReactNode
 }
 
 const CANVAS_BG = '#ececef'
@@ -70,8 +72,9 @@ export function WorkflowCanvasView({
   embeddedTitleMatchChat,
   embeddedTitleFontSize = 13,
   embeddedTitleColor = '#111',
+  embeddedSplitBreadcrumbs,
 }: WorkflowCanvasViewProps) {
-  const showRailBack = embeddedInChatSplit && !suppressEmbeddedNav
+  const showRailBack = embeddedInChatSplit && !suppressEmbeddedNav && !embeddedSplitBreadcrumbs
 
   return (
     <div
@@ -143,56 +146,60 @@ export function WorkflowCanvasView({
             <Icon name="chevron_left" size={18} />
           </motion.button>
         )}
-        <div style={{ flex: 1, minWidth: 0, display: 'flex', alignItems: 'flex-start', gap: 6 }}>
-          {onOpenChat && (
-            <motion.button
-              type="button"
-              whileHover={{ scale: 1.05 }}
-              whileTap={{ scale: 0.96 }}
-              onClick={onOpenChat}
-              title="Open chat"
-              style={{
-                width: 36,
-                height: 36,
-                borderRadius: 8,
-                border: 'none',
-                background: 'transparent',
-                display: 'flex',
-                alignItems: 'center',
-                justifyContent: 'center',
-                cursor: 'pointer',
-                color: '#555',
-                flexShrink: 0,
-              }}
-            >
-              <Icon name="view_sidebar" size={20} />
-            </motion.button>
-          )}
-          <div style={{ flex: 1, minWidth: 0 }}>
-            <div
-              style={
-                embeddedTitleMatchChat
-                  ? {
-                      fontSize: embeddedTitleFontSize,
-                      fontWeight: 400,
-                      fontFamily: 'var(--font-sans)',
-                      letterSpacing: '-0.1px',
-                      color: embeddedTitleColor,
-                      lineHeight: 1.25,
-                    }
-                  : {
-                      fontSize: 15,
-                      fontWeight: 700,
-                      fontFamily: 'var(--font-heading)',
-                      lineHeight: 1.25,
-                    }
-              }
-            >
-              {WORKFLOW_CANVAS_DISPLAY_NAME}
+        {embeddedSplitBreadcrumbs ? (
+          <div style={{ flex: 1, minWidth: 0, alignSelf: 'center' }}>{embeddedSplitBreadcrumbs}</div>
+        ) : (
+          <div style={{ flex: 1, minWidth: 0, display: 'flex', alignItems: 'flex-start', gap: 6 }}>
+            {onOpenChat && (
+              <motion.button
+                type="button"
+                whileHover={{ scale: 1.05 }}
+                whileTap={{ scale: 0.96 }}
+                onClick={onOpenChat}
+                title="Open chat"
+                style={{
+                  width: 36,
+                  height: 36,
+                  borderRadius: 8,
+                  border: 'none',
+                  background: 'transparent',
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  cursor: 'pointer',
+                  color: '#555',
+                  flexShrink: 0,
+                }}
+              >
+                <Icon name="view_sidebar" size={20} />
+              </motion.button>
+            )}
+            <div style={{ flex: 1, minWidth: 0 }}>
+              <div
+                style={
+                  embeddedTitleMatchChat
+                    ? {
+                        fontSize: embeddedTitleFontSize,
+                        fontWeight: 400,
+                        fontFamily: 'var(--font-sans)',
+                        letterSpacing: '-0.1px',
+                        color: embeddedTitleColor,
+                        lineHeight: 1.25,
+                      }
+                    : {
+                        fontSize: 15,
+                        fontWeight: 700,
+                        fontFamily: 'var(--font-heading)',
+                        lineHeight: 1.25,
+                      }
+                }
+              >
+                {WORKFLOW_CANVAS_DISPLAY_NAME}
+              </div>
+              <div style={{ fontSize: 11, color: TEXT_MUTED, marginTop: 2 }}>Workflows · Last edited 2h ago</div>
             </div>
-            <div style={{ fontSize: 11, color: TEXT_MUTED, marginTop: 2 }}>Workflows · Last edited 2h ago</div>
           </div>
-        </div>
+        )}
         <div style={{ display: 'flex', alignItems: 'center', gap: 4, flexShrink: 0 }}>
           <button
             type="button"

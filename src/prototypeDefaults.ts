@@ -1,7 +1,7 @@
 /**
  * Prototype defaults → interaction rules (single copy-paste unit for another repo).
  *
- * Matches **Prototype Options** + shell layout in App — motion model, elevation, chat dock/orientation,
+ * Matches **Prototype Options** + shell layout in App — motion model, elevation, chat dock policy/orientation,
  * nav breakpoint, responsive dock widths, fullscreen snap threshold. Pair with `getChatWidth()` usage
  * in your shell resize logic.
  */
@@ -9,6 +9,13 @@ import type { ChatOrientation } from './components/ChatPanel'
 import type { PageId } from './components/PageContent'
 
 export type ColorScheme = 'white' | 'grey' | 'variable'
+
+/**
+ * Canvas split from chat links (dashboard edit, schedule):
+ * - `right_and_left`: chat docks **left**, canvas on the right (legacy / WIW-style swap).
+ * - `always_right`: chat stays **right**, linked content opens on the **left**.
+ */
+export type ChatDockPolicy = 'always_right' | 'right_and_left'
 
 /** Viewport width below which the nav auto-collapses. */
 export const NAV_COLLAPSE_BP = 1024
@@ -30,7 +37,13 @@ export const PROTOTYPE_DEFAULTS = {
   colorScheme: 'variable' as ColorScheme,
   corners: 'none' as const,
   drawerMode: 'collapse' as const,
+  /** Seeded vs empty thread in `ChatPanel` (no longer toggled from prototype bar). */
   chatFill: 'empty' as const,
+  /**
+   * Shell canvas splits + full-screen / docked **ChatPanel** splits (reports, workflows, schedule):
+   * `always_right` keeps Rippling AI on the **right**; `right_and_left` keeps legacy chat-left / canvas-right.
+   */
+  chatDockPolicy: 'right_and_left' as ChatDockPolicy,
   chatOpen: true,
   chatOrientation: 'sidebar' as ChatOrientation,
   activePage: null as PageId | null,

@@ -48,7 +48,14 @@ function topBarGhostBtn(hover: boolean): React.CSSProperties {
   }
 }
 
-export function ModeBar({ navOpen = true, onNavOpen, onLogoClick, chatOpen = false, onChatToggle, onSearchOpen }: ModeBarProps) {
+export function ModeBar({
+  navOpen = true,
+  onNavOpen,
+  onLogoClick,
+  chatOpen = false,
+  onChatToggle,
+  onSearchOpen,
+}: ModeBarProps) {
   const [searchFocused, setSearchFocused] = useState(false)
   const [hoverSlot, setHoverSlot] = useState<string | null>(null)
 

@@ -2,7 +2,7 @@ import { useState, useEffect, useLayoutEffect, useRef, useCallback } from 'react
 import { AnimatePresence, motion, useMotionValue, useTransform, animate } from 'motion/react'
 import { Icon } from './components/Icon'
 import { ModeBar, type Mode } from './components/ModeBar'
-import { NavPanel, NAV_WIDTH, type SideBySideNavId } from './components/NavPanel'
+import { NavPanel, navRailWidthPx, type SideBySideNavId } from './components/NavPanel'
 import {
   ChatPanel,
   ReportPanelContent,
@@ -21,6 +21,7 @@ import {
   NAV_COLLAPSE_BP,
   MIN_CHAT_W,
   getChatWidth,
+  type ChatDockPolicy,
   type ColorScheme,
 } from './prototypeDefaults'
 
@@ -62,9 +63,22 @@ function canvasChatDockPresence(side: 'left' | 'right') {
   }
 }
 
-/** Workflow, Flow (stepper), Canvas — no persistent left rail; nav opens as an overlay on top of the stage. */
-function isNavOverlayPage(page: PageId | null): boolean {
-  return page === 'flow' || page === 'stepper' || page === 'canvas'
+/** No persistent left rail — nav opens as an overlay from the hamburger (workflow, dashboard, canvas, immersive reports). */
+function navUsesOverlayOnly(
+  page: PageId | null,
+  reportFullscreen: boolean,
+  reportBuilderEditOpen: boolean,
+  chatSplitRailOpen: boolean,
+): boolean {
+  return (
+    page === 'flow' ||
+    page === 'stepper' ||
+    page === 'canvas' ||
+    page === 'dashboard' ||
+    reportFullscreen ||
+    reportBuilderEditOpen ||
+    chatSplitRailOpen
+  )
 }
 
 // ─── App ──────────────────────────────────────────────────────────────────────
@@ -74,7 +88,7 @@ export default function App() {
   const [elevation, setElevation]               = useState<'base' | 'shadow' | 'variable'>(PROTOTYPE_DEFAULTS.elevation)
   const [hoveredPanel, setHoveredPanel]         = useState<'chat' | 'nav' | null>(null)
   const [colorScheme, setColorScheme]           = useState<ColorScheme>(PROTOTYPE_DEFAULTS.colorScheme)
-  const [chatFill, setChatFill]                 = useState<'filled' | 'empty'>(PROTOTYPE_DEFAULTS.chatFill)
+  const [chatDockPolicy, setChatDockPolicy]     = useState<ChatDockPolicy>(PROTOTYPE_DEFAULTS.chatDockPolicy)
   const [corners, setCorners]                   = useState<'none' | 'round'>(PROTOTYPE_DEFAULTS.corners)
   const [drawerMode, setDrawerMode]             = useState<'floating' | 'embedded' | 'collapse'>(PROTOTYPE_DEFAULTS.drawerMode)
   const [activePage, setActivePage]             = useState<PageId | null>(PROTOTYPE_DEFAULTS.activePage)
@@ -83,12 +97,20 @@ export default function App() {
   const [pendingMessage, setPendingMessage]     = useState('')
   /** ChatPanel workflow/report split — docked shell expands to full stage width so chat + rail fit. */
   const [chatSplitRailOpen, setChatSplitRailOpen] = useState(false)
+  /** Report/workflow/schedule beside chat: AI top bar toggles chat column (same as double-chevron hide). */
+  const [splitChatColumnHidden, setSplitChatColumnHidden] = useState(false)
   /** Side-by-side nav → ChatPanel opens report/workflow split when nonce bumps. */
   const [navSplitNonce, setNavSplitNonce] = useState(0)
   const [navSplitKind, setNavSplitKind] = useState<'reports' | 'workflows' | null>(null)
   const [sideBySideActive, setSideBySideActive] = useState<SideBySideNavId | null>(null)
   const [reportFullscreen, setReportFullscreen] = useState(false)
   const [reportBuilderEditOpen, setReportBuilderEditOpen] = useState(false)
+  const navOverlayOnly = navUsesOverlayOnly(
+    activePage,
+    reportFullscreen,
+    reportBuilderEditOpen,
+    chatSplitRailOpen,
+  )
   /** Canvas: chat docks right until “edit mode” moves it left + outlines widgets. */
   const [canvasDashboardEditMode, setCanvasDashboardEditMode] = useState(PROTOTYPE_DEFAULTS.canvasDashboardEditMode)
   /** Canvas page: WIW schedule beside docked chat (same resize shell as dashboard edit). */
@@ -96,6 +118,8 @@ export default function App() {
   const [canvasLeftChatExpanded, setCanvasLeftChatExpanded] = useState(PROTOTYPE_DEFAULTS.canvasLeftChatExpanded)
 
   const isFullchat = chatOpen && chatOrientation === 'fullscreen'
+  /** OUT model: docked chat is z-10 under the nav overlay (z-20/40); fullscreen must stack above so the left edge resize strip gets pointer events. */
+  const outDockedChatZIndex = isFullchat ? 45 : 10
   const isFloating = chatOpen && chatOrientation === 'floating'
   const [snapHint, setSnapHint] = useState(false)
   const floatingRef = useRef<HTMLDivElement>(null)
@@ -105,12 +129,19 @@ export default function App() {
   } | null>(null)
   // When floating, the sidebar slot is empty (panel renders at root level)
   const chatInSidebar = chatOpen && chatOrientation === 'sidebar'
-  const useCanvasLeftDock =
+  const showNav = !isFullchat
+  const navRailDisplayed = showNav
+
+  /** Canvas is split beside docked chat (dashboard edit or schedule from links / nav). */
+  const canvasChatSplitDocked =
     activePage === 'canvas' &&
     (canvasDashboardEditMode || scheduleCanvasSplitMode) &&
     !isFloating &&
     chatInSidebar &&
     !isFullchat
+  /** When split, dock chat on the **left** only in `right_and_left` policy (`always_right` keeps chat on the right). */
+  const useCanvasLeftDock =
+    canvasChatSplitDocked && chatDockPolicy === 'right_and_left'
 
   /** Canvas dashboard or schedule split + docked sidebar chat — split resize clamp applies. */
   const canvasStageSideBySideExpanded =
@@ -145,18 +176,19 @@ export default function App() {
     if (isNarrow) nav.close()
   }, [isNarrow]) // eslint-disable-line react-hooks/exhaustive-deps
 
-  // Workflow / Flow / Canvas — hide rail by default (overlay when opened from ModeBar)
+  // Overlay-only shells — start with nav drawer closed so the stage isn’t narrow.
   useEffect(() => {
-    if (isNavOverlayPage(activePage)) nav.close()
-  }, [activePage]) // eslint-disable-line react-hooks/exhaustive-deps
+    if (navOverlayOnly) nav.close()
+  }, [navOverlayOnly, nav])
 
   // ── Drag-to-resize (shared by both interaction models) ───────────────────────
   const stageRef       = useRef<HTMLDivElement>(null)
   const panelWidthMV   = useMotionValue(0)
-  const navDockOffsetMV = useMotionValue(navOpen ? NAV_WIDTH : 0)
+  const navStageOffsetPx = navRailDisplayed ? navRailWidthPx(navOpen) : 0
+  const navDockOffsetMV = useMotionValue(navStageOffsetPx)
   useLayoutEffect(() => {
-    navDockOffsetMV.set(navOpen ? NAV_WIDTH : 0)
-  }, [navOpen, navDockOffsetMV])
+    navDockOffsetMV.set(navStageOffsetPx)
+  }, [navStageOffsetPx, navDockOffsetMV])
   /** Left edge of dashboard gutter strip (OUT model): flush after docked chat when nav rail is open. */
   const outDashboardGutterLeft = useTransform([panelWidthMV, navDockOffsetMV], ([w, o]) => Number(w) + Number(o))
   /** Distance from stage right to inner edge of right-docked chat — aligns gutter beside canvas. */
@@ -180,16 +212,25 @@ export default function App() {
   }, [windowWidth, canvasStageSideBySideExpanded])
 
   useEffect(() => {
-    if (!chatOpen) setChatSplitRailOpen(false)
+    if (!chatOpen) {
+      setChatSplitRailOpen(false)
+      setSplitChatColumnHidden(false)
+    }
   }, [chatOpen])
+
+  useEffect(() => {
+    if (!chatSplitRailOpen) setSplitChatColumnHidden(false)
+  }, [chatSplitRailOpen])
 
   // Keep panelWidthMV in sync with chat open/close state and responsive width
   useEffect(() => {
     const containerW = stageRef.current?.clientWidth ?? window.innerWidth
     if (isFullchat) {
+      // Don't fight an in-progress dock resize (e.g. shrinking from fullscreen)
+      if (dragStartX.current !== null) return
       animate(panelWidthMV, containerW, SPRING)
     } else if (chatInSidebar) {
-      if (useCanvasLeftDock && !canvasLeftChatExpanded) {
+      if (canvasChatSplitDocked && !canvasLeftChatExpanded) {
         animate(panelWidthMV, 0, SPRING)
       } else if (chatSplitRailOpen) {
         animate(panelWidthMV, containerW, SPRING)
@@ -212,12 +253,13 @@ export default function App() {
     chatWidth,
     dockedChatUserWidth,
     effectiveChatWidth,
-    useCanvasLeftDock,
+    canvasChatSplitDocked,
     canvasLeftChatExpanded,
     isFullchat,
     chatInSidebar,
     chatSplitRailOpen,
     canvasStageSideBySideExpanded,
+    chatDockPolicy,
   ])
 
   // Fade page content out as panel widens toward full-screen
@@ -271,7 +313,7 @@ export default function App() {
         },
       })
     } else if (!canvasStageSideBySideExpanded && currentW < MIN_CHAT_W + 20) {
-      if (resizeDockRef.current === 'left') {
+      if (resizeDockRef.current === 'left' || canvasChatSplitDocked) {
         animate(panelWidthMV, 0, { ...SPRING, onComplete: () => { setCanvasLeftChatExpanded(false) } })
       } else {
         animate(panelWidthMV, 0, { ...SPRING, onComplete: () => setChatOpen(false) })
@@ -288,7 +330,9 @@ export default function App() {
   }
   // ────────────────────────────────────────────────────────────────────────────
 
-  const showNav = !isFullchat
+  const handleModeBarNavToggle = useCallback(() => {
+    nav.toggle()
+  }, [nav])
 
   function handleReportFullscreen() {
     // Report takes over — dismiss chat, show report as a full-screen page
@@ -351,15 +395,6 @@ export default function App() {
       panelWidthMV.set(effectiveChatWidth)
     }
   }, [interactionModel, effectiveChatWidth, panelWidthMV])
-
-  function handleChatToggle() {
-    if (!chatOpen) {
-      setDockedChatUserWidth(SIDEBAR_CHAT_OPEN_FROM_NAV_PX)
-      panelWidthMV.set(0)
-      setChatOrientation('sidebar')
-    }
-    setChatOpen((v) => !v)
-  }
 
   const SNAP_THRESHOLD = 120
 
@@ -446,6 +481,33 @@ export default function App() {
     animate(panelWidthMV, 0, SPRING)
   }, [panelWidthMV])
 
+  function handleChatToggle() {
+    if (chatSplitRailOpen) {
+      setSplitChatColumnHidden((h) => !h)
+      return
+    }
+    if (canvasChatSplitDocked) {
+      if (!canvasLeftChatExpanded) {
+        expandCanvasLeftChat()
+      } else {
+        collapseCanvasLeftChat()
+      }
+      return
+    }
+    if (!chatOpen) {
+      setDockedChatUserWidth(SIDEBAR_CHAT_OPEN_FROM_NAV_PX)
+      panelWidthMV.set(0)
+      setChatOrientation('sidebar')
+    }
+    setChatOpen((v) => !v)
+  }
+
+  /** ModeBar AI control reflects whether the chat column is visible (incl. split hide + canvas strip collapse). */
+  const modeBarChatOpen =
+    chatOpen &&
+    !(chatSplitRailOpen && splitChatColumnHidden) &&
+    !(canvasChatSplitDocked && !canvasLeftChatExpanded)
+
   const enterCanvasDashboardEditMode = useCallback(() => {
     setScheduleCanvasSplitMode(false)
     setCanvasDashboardEditMode(true)
@@ -493,21 +555,20 @@ export default function App() {
   const handleGoHome = useCallback(() => {
     handleNavPageChange(null)
     setNavSplitKind(null)
+    /** Bump so ChatPanel closes report/workflow rails when kind becomes null (Home leaves AI fullscreen only). */
+    setNavSplitNonce((n) => n + 1)
     setReportFullscreen(false)
     setReportBuilderEditOpen(false)
     setCanvasDashboardEditMode(false)
     setScheduleCanvasSplitMode(false)
     setChatSplitRailOpen(false)
+    /** Leave canvas / report split behind but keep AI fullscreen — do not collapse to sidebar (that felt like minimizing both panes). */
     if (chatOrientation === 'fullscreen') {
-      setChatOrientation('sidebar')
-      animate(panelWidthMV, effectiveChatWidth, SPRING)
+      setChatOpen(true)
+      const containerW = stageRef.current?.clientWidth ?? window.innerWidth
+      animate(panelWidthMV, containerW, SPRING)
     }
-  }, [
-    handleNavPageChange,
-    chatOrientation,
-    effectiveChatWidth,
-    panelWidthMV,
-  ])
+  }, [handleNavPageChange, chatOrientation, panelWidthMV])
 
   const handleSideBySideSelect = useCallback(
     (id: SideBySideNavId) => {
@@ -587,10 +648,10 @@ export default function App() {
         <ModeBar
           mode={chatMode}
           onModeChange={() => {}}
-          navOpen={navOpen && showNav}
-          onNavOpen={nav.toggle}
+          navOpen={navRailDisplayed && navOpen}
+          onNavOpen={handleModeBarNavToggle}
           onLogoClick={handleGoHome}
-          chatOpen={chatOpen}
+          chatOpen={modeBarChatOpen}
           onChatToggle={handleChatToggle}
         />
       </div>
@@ -697,7 +758,10 @@ export default function App() {
                 initialQuery={pendingMessage}
                 elevation={chatElevation}
                 panelBg={chatBg}
-                chatFill={chatFill}
+                chatFill={PROTOTYPE_DEFAULTS.chatFill}
+                chatDockPolicy={chatDockPolicy}
+                splitChatColumnHidden={splitChatColumnHidden}
+                onSplitChatColumnHiddenChange={setSplitChatColumnHidden}
                 onSplitCanvasOpenChange={setChatSplitRailOpen}
                 onReportFullscreen={handleReportFullscreen}
                 onOpenReportInEditMode={handleOpenReportInEditMode}
@@ -736,11 +800,12 @@ export default function App() {
                 : <PageContent
                     activePage={activePage} onAskAI={openChatWithMessage} onAskAIFromChip={openChatFloating} elevation={elevation} pageBg={pageBg}
                     drawerMode={drawerMode} onOpenFloating={openChatFloating} onOpenFullscreen={openMainChatFullscreen} onCloseMainChat={closeMainChat}
-                    canvasLeftChatCollapsed={useCanvasLeftDock && !canvasLeftChatExpanded}
+                    canvasLeftChatCollapsed={canvasChatSplitDocked && !canvasLeftChatExpanded}
                     onExpandCanvasLeftChat={expandCanvasLeftChat}
                     dashboardEditMode={canvasDashboardEditMode}
                     canvasEdgeShadow={canvasEdgeShadow}
                     onDashboardEnterEdit={openDashboardEditFromChat}
+                    chatDockPolicy={chatDockPolicy}
                     scheduleSplitMode={scheduleCanvasSplitMode && activePage === 'canvas'}
                     onCloseScheduleSplit={closeScheduleSideBySide}
                   />
@@ -748,7 +813,7 @@ export default function App() {
             </motion.div>
 
             {/* Nav overlay — slides in from left on top of content */}
-            {showNav && (
+            {navRailDisplayed && (
               <div
                 onMouseEnter={() => setHoveredPanel('nav')}
                 onMouseLeave={() => setHoveredPanel(null)}
@@ -757,9 +822,9 @@ export default function App() {
                   left: 0,
                   top: 0,
                   bottom: 0,
-                  zIndex: isNavOverlayPage(activePage) ? 40 : 20,
+                  zIndex: navOverlayOnly ? 40 : 20,
                   display: 'flex',
-                  pointerEvents: navOpen ? 'auto' : 'none',
+                  pointerEvents: 'auto',
                 }}
               >
                 <NavPanel
@@ -802,7 +867,7 @@ export default function App() {
                         boxShadow: !rounded && chatHasShadow
                           ? '-4px 0 20px rgba(0,0,0,0.09), -8px 0 40px rgba(0,0,0,0.05)'
                           : 'none',
-                        zIndex: 10,
+                        zIndex: outDockedChatZIndex,
                       }}
                     >
                       <div style={{
@@ -828,7 +893,10 @@ export default function App() {
                           initialQuery={pendingMessage}
                           elevation={chatElevation}
                           panelBg={chatBg}
-                          chatFill={chatFill}
+                          chatFill={PROTOTYPE_DEFAULTS.chatFill}
+                          chatDockPolicy={chatDockPolicy}
+                          splitChatColumnHidden={splitChatColumnHidden}
+                          onSplitChatColumnHiddenChange={setSplitChatColumnHidden}
                           onSplitCanvasOpenChange={setChatSplitRailOpen}
                           onReportFullscreen={handleReportFullscreen}
                           onOpenReportInEditMode={handleOpenReportInEditMode}
@@ -841,7 +909,6 @@ export default function App() {
                           {...chatNavSplitBootstrap}
                         />
                       </div>
-                      {!isFullchat && (
                       <div
                         role="separator"
                         aria-orientation="vertical"
@@ -856,13 +923,12 @@ export default function App() {
                           width: 8, cursor: 'col-resize', zIndex: 40, touchAction: 'none', pointerEvents: 'auto',
                         }}
                       />
-                      )}
                     </motion.div>
                   )
                 })()}
                 {showDockedChatLeft && (() => {
                   const rounded = corners === 'round' && !isFullchat
-                  const navOff = navOpen ? NAV_WIDTH : 0
+                  const navOff = navStageOffsetPx
                   return (
                     <motion.div
                       key="canvas-out-left"
@@ -884,7 +950,7 @@ export default function App() {
                         boxShadow: !rounded && chatHasShadow
                           ? '4px 0 20px rgba(0,0,0,0.09), 8px 0 40px rgba(0,0,0,0.05)'
                           : 'none',
-                        zIndex: 10,
+                        zIndex: outDockedChatZIndex,
                       }}
                     >
                       <div style={{
@@ -907,7 +973,10 @@ export default function App() {
                           initialQuery={pendingMessage}
                           elevation={chatElevation}
                           panelBg={chatBg}
-                          chatFill={chatFill}
+                          chatFill={PROTOTYPE_DEFAULTS.chatFill}
+                          chatDockPolicy={chatDockPolicy}
+                          splitChatColumnHidden={splitChatColumnHidden}
+                          onSplitChatColumnHiddenChange={setSplitChatColumnHidden}
                           onSplitCanvasOpenChange={setChatSplitRailOpen}
                           onReportFullscreen={handleReportFullscreen}
                           onOpenReportInEditMode={handleOpenReportInEditMode}
@@ -920,7 +989,6 @@ export default function App() {
                           {...chatNavSplitBootstrap}
                         />
                       </div>
-                      {!isFullchat && (
                       <div
                         role="separator"
                         aria-orientation="vertical"
@@ -935,7 +1003,6 @@ export default function App() {
                           width: 8, cursor: 'col-resize', zIndex: 40, touchAction: 'none', pointerEvents: 'auto',
                         }}
                       />
-                      )}
                     </motion.div>
                   )
                 })()}
@@ -998,7 +1065,7 @@ export default function App() {
                         boxShadow: !rounded && chatHasShadow
                           ? '-4px 0 20px rgba(0,0,0,0.09), -8px 0 40px rgba(0,0,0,0.05)'
                           : 'none',
-                        zIndex: 10,
+                        zIndex: outDockedChatZIndex,
                       }}
                     >
                       <div style={{
@@ -1024,7 +1091,10 @@ export default function App() {
                           initialQuery={pendingMessage}
                           elevation={chatElevation}
                           panelBg={chatBg}
-                          chatFill={chatFill}
+                          chatFill={PROTOTYPE_DEFAULTS.chatFill}
+                          chatDockPolicy={chatDockPolicy}
+                          splitChatColumnHidden={splitChatColumnHidden}
+                          onSplitChatColumnHiddenChange={setSplitChatColumnHidden}
                           onSplitCanvasOpenChange={setChatSplitRailOpen}
                           onReportFullscreen={handleReportFullscreen}
                           onOpenReportInEditMode={handleOpenReportInEditMode}
@@ -1037,7 +1107,6 @@ export default function App() {
                           {...chatNavSplitBootstrap}
                         />
                       </div>
-                      {!isFullchat && (
                       <div
                         role="separator"
                         aria-orientation="vertical"
@@ -1052,13 +1121,12 @@ export default function App() {
                           width: 8, cursor: 'col-resize', zIndex: 40, touchAction: 'none', pointerEvents: 'auto',
                         }}
                       />
-                      )}
                     </motion.div>
                   )
                 })()}
                 {showDockedChatLeft && (() => {
                   const rounded = corners === 'round' && !isFullchat
-                  const navOff = navOpen ? NAV_WIDTH : 0
+                  const navOff = navStageOffsetPx
                   return (
                     <motion.div
                       onMouseEnter={() => setHoveredPanel('chat')}
@@ -1078,7 +1146,7 @@ export default function App() {
                         boxShadow: !rounded && chatHasShadow
                           ? '4px 0 20px rgba(0,0,0,0.09), 8px 0 40px rgba(0,0,0,0.05)'
                           : 'none',
-                        zIndex: 10,
+                        zIndex: outDockedChatZIndex,
                       }}
                     >
                       <div style={{
@@ -1101,7 +1169,10 @@ export default function App() {
                           initialQuery={pendingMessage}
                           elevation={chatElevation}
                           panelBg={chatBg}
-                          chatFill={chatFill}
+                          chatFill={PROTOTYPE_DEFAULTS.chatFill}
+                          chatDockPolicy={chatDockPolicy}
+                          splitChatColumnHidden={splitChatColumnHidden}
+                          onSplitChatColumnHiddenChange={setSplitChatColumnHidden}
                           onSplitCanvasOpenChange={setChatSplitRailOpen}
                           onReportFullscreen={handleReportFullscreen}
                           onOpenReportInEditMode={handleOpenReportInEditMode}
@@ -1114,7 +1185,6 @@ export default function App() {
                           {...chatNavSplitBootstrap}
                         />
                       </div>
-                      {!isFullchat && (
                       <div
                         role="separator"
                         aria-orientation="vertical"
@@ -1129,7 +1199,6 @@ export default function App() {
                           width: 8, cursor: 'col-resize', zIndex: 40, touchAction: 'none', pointerEvents: 'auto',
                         }}
                       />
-                      )}
                     </motion.div>
                   )
                 })()}
@@ -1140,7 +1209,7 @@ export default function App() {
         ) : (
           // ── IN: panels push content (flex row) ───────────────────────────────
           <>
-            {showNav && !isNavOverlayPage(activePage) && (
+            {navRailDisplayed && !navOverlayOnly && (
               <div
                 onMouseEnter={() => setHoveredPanel('nav')}
                 onMouseLeave={() => setHoveredPanel(null)}
@@ -1161,7 +1230,7 @@ export default function App() {
 
             <div ref={stageRef} style={{ flex: 1, display: 'flex', overflow: 'hidden', minWidth: 0, position: 'relative' }}>
               {/* Workflow / Flow / Canvas — nav drawer on top of content (no persistent rail) */}
-              {showNav && isNavOverlayPage(activePage) && (
+              {navRailDisplayed && navOverlayOnly && (
                 <div
                   onMouseEnter={() => setHoveredPanel('nav')}
                   onMouseLeave={() => setHoveredPanel(null)}
@@ -1172,7 +1241,7 @@ export default function App() {
                     bottom: 0,
                     zIndex: 40,
                     display: 'flex',
-                    pointerEvents: navOpen ? 'auto' : 'none',
+                    pointerEvents: 'auto',
                   }}
                 >
                   <NavPanel
@@ -1205,7 +1274,7 @@ export default function App() {
                       onClose={closeScheduleSideBySide}
                       panelBg={chatBg}
                       aiCompDocked
-                      showSideNavButton={useCanvasLeftDock && !canvasLeftChatExpanded}
+                      showSideNavButton={canvasChatSplitDocked && !canvasLeftChatExpanded}
                       onSideNavClick={nav.toggle}
                     />
                   )}
@@ -1215,7 +1284,7 @@ export default function App() {
                       onClose={closeDashboardSideBySide}
                       panelBg={chatBg}
                       aiCompDocked
-                      showSideNavButton={useCanvasLeftDock && !canvasLeftChatExpanded}
+                      showSideNavButton={canvasChatSplitDocked && !canvasLeftChatExpanded}
                       onSideNavClick={nav.toggle}
                     />
                   )}
@@ -1280,7 +1349,10 @@ export default function App() {
                               initialQuery={pendingMessage}
                               elevation={chatElevation}
                               panelBg={chatBg}
-                              chatFill={chatFill}
+                              chatFill={PROTOTYPE_DEFAULTS.chatFill}
+                              chatDockPolicy={chatDockPolicy}
+                              splitChatColumnHidden={splitChatColumnHidden}
+                              onSplitChatColumnHiddenChange={setSplitChatColumnHidden}
                               onSplitCanvasOpenChange={setChatSplitRailOpen}
                               onReportFullscreen={handleReportFullscreen}
                               onOpenReportInEditMode={handleOpenReportInEditMode}
@@ -1293,7 +1365,6 @@ export default function App() {
                               {...chatNavSplitBootstrap}
                             />
                           </div>
-                          {!isFullchat && (
                           <div
                             role="separator"
                             aria-orientation="vertical"
@@ -1308,7 +1379,6 @@ export default function App() {
                               width: 8, cursor: 'col-resize', zIndex: 40, touchAction: 'none', pointerEvents: 'auto',
                             }}
                           />
-                          )}
                         </motion.div>
                       )
                     })()}
@@ -1363,7 +1433,10 @@ export default function App() {
                               initialQuery={pendingMessage}
                               elevation={chatElevation}
                               panelBg={chatBg}
-                              chatFill={chatFill}
+                              chatFill={PROTOTYPE_DEFAULTS.chatFill}
+                              chatDockPolicy={chatDockPolicy}
+                              splitChatColumnHidden={splitChatColumnHidden}
+                              onSplitChatColumnHiddenChange={setSplitChatColumnHidden}
                               onSplitCanvasOpenChange={setChatSplitRailOpen}
                               onReportFullscreen={handleReportFullscreen}
                               onOpenReportInEditMode={handleOpenReportInEditMode}
@@ -1376,7 +1449,6 @@ export default function App() {
                               {...chatNavSplitBootstrap}
                             />
                           </div>
-                          {!isFullchat && (
                           <div
                             role="separator"
                             aria-orientation="vertical"
@@ -1391,7 +1463,6 @@ export default function App() {
                               width: 8, cursor: 'col-resize', zIndex: 40, touchAction: 'none', pointerEvents: 'auto',
                             }}
                           />
-                          )}
                         </motion.div>
                       )
                     })()}
@@ -1441,11 +1512,12 @@ export default function App() {
                     : <PageContent
                         activePage={activePage} onAskAI={openChatWithMessage} onAskAIFromChip={openChatFloating} elevation={elevation} pageBg={pageBg}
                         drawerMode={drawerMode} onOpenFloating={openChatFloating} onOpenFullscreen={openMainChatFullscreen} onCloseMainChat={closeMainChat}
-                        canvasLeftChatCollapsed={useCanvasLeftDock && !canvasLeftChatExpanded}
+                        canvasLeftChatCollapsed={canvasChatSplitDocked && !canvasLeftChatExpanded}
                         onExpandCanvasLeftChat={expandCanvasLeftChat}
                         dashboardEditMode={canvasDashboardEditMode}
                         canvasEdgeShadow={canvasEdgeShadow}
                         onDashboardEnterEdit={openDashboardEditFromChat}
+                        chatDockPolicy={chatDockPolicy}
                         scheduleSplitMode={scheduleCanvasSplitMode && activePage === 'canvas'}
                         onCloseScheduleSplit={closeScheduleSideBySide}
                       />
@@ -1498,7 +1570,10 @@ export default function App() {
                             initialQuery={pendingMessage}
                             elevation={chatElevation}
                             panelBg={chatBg}
-                            chatFill={chatFill}
+                            chatFill={PROTOTYPE_DEFAULTS.chatFill}
+                            chatDockPolicy={chatDockPolicy}
+                            splitChatColumnHidden={splitChatColumnHidden}
+                            onSplitChatColumnHiddenChange={setSplitChatColumnHidden}
                             onSplitCanvasOpenChange={setChatSplitRailOpen}
                             onReportFullscreen={handleReportFullscreen}
                             onOpenReportInEditMode={handleOpenReportInEditMode}
@@ -1511,7 +1586,6 @@ export default function App() {
                             {...chatNavSplitBootstrap}
                           />
                         </div>
-                        {!isFullchat && (
                         <div
                           role="separator"
                           aria-orientation="vertical"
@@ -1526,7 +1600,6 @@ export default function App() {
                             width: 8, cursor: 'col-resize', zIndex: 40, touchAction: 'none', pointerEvents: 'auto',
                           }}
                         />
-                        )}
                       </motion.div>
                     )
                   })()}
@@ -1546,11 +1619,12 @@ export default function App() {
                     : <PageContent
                         activePage={activePage} onAskAI={openChatWithMessage} onAskAIFromChip={openChatFloating} elevation={elevation} pageBg={pageBg}
                         drawerMode={drawerMode} onOpenFloating={openChatFloating} onOpenFullscreen={openMainChatFullscreen} onCloseMainChat={closeMainChat}
-                        canvasLeftChatCollapsed={useCanvasLeftDock && !canvasLeftChatExpanded}
+                        canvasLeftChatCollapsed={canvasChatSplitDocked && !canvasLeftChatExpanded}
                         onExpandCanvasLeftChat={expandCanvasLeftChat}
                         dashboardEditMode={canvasDashboardEditMode}
                         canvasEdgeShadow={canvasEdgeShadow}
                         onDashboardEnterEdit={openDashboardEditFromChat}
+                        chatDockPolicy={chatDockPolicy}
                         scheduleSplitMode={scheduleCanvasSplitMode && activePage === 'canvas'}
                         onCloseScheduleSplit={closeScheduleSideBySide}
                       />
@@ -1603,7 +1677,10 @@ export default function App() {
                             initialQuery={pendingMessage}
                             elevation={chatElevation}
                             panelBg={chatBg}
-                            chatFill={chatFill}
+                            chatFill={PROTOTYPE_DEFAULTS.chatFill}
+                            chatDockPolicy={chatDockPolicy}
+                            splitChatColumnHidden={splitChatColumnHidden}
+                            onSplitChatColumnHiddenChange={setSplitChatColumnHidden}
                             onSplitCanvasOpenChange={setChatSplitRailOpen}
                             onReportFullscreen={handleReportFullscreen}
                             onOpenReportInEditMode={handleOpenReportInEditMode}
@@ -1616,7 +1693,6 @@ export default function App() {
                             {...chatNavSplitBootstrap}
                           />
                         </div>
-                        {!isFullchat && (
                         <div
                           role="separator"
                           aria-orientation="vertical"
@@ -1631,7 +1707,6 @@ export default function App() {
                             width: 8, cursor: 'col-resize', zIndex: 40, touchAction: 'none', pointerEvents: 'auto',
                           }}
                         />
-                        )}
                       </motion.div>
                     )
                   })()}
@@ -1723,10 +1798,13 @@ export default function App() {
         colorScheme={colorScheme} onColorSchemeChange={setColorScheme}
         corners={corners}        onCornersChange={setCorners}
         drawerMode={drawerMode}  onDrawerModeChange={setDrawerMode}
-        chatFill={chatFill}      onChatFillChange={(f) => {
-          setChatFill(f)
-          // Open the chat panel so the fill change is immediately visible
-          if (!chatOpen) { setChatOpen(true); setChatOrientation('sidebar') }
+        chatDockPolicy={chatDockPolicy}
+        onChatDockPolicyChange={(p) => {
+          setChatDockPolicy(p)
+          if (!chatOpen) {
+            setChatOpen(true)
+            setChatOrientation('sidebar')
+          }
         }}
       />
     </div>
@@ -1778,14 +1856,14 @@ function PrototypeOptions({
   colorScheme, onColorSchemeChange,
   corners, onCornersChange,
   drawerMode, onDrawerModeChange,
-  chatFill, onChatFillChange,
+  chatDockPolicy, onChatDockPolicyChange,
 }: {
   model: 'in' | 'out'; onModelChange: (m: 'in' | 'out') => void
   elevation: 'base' | 'shadow' | 'variable'; onElevationChange: (e: 'base' | 'shadow' | 'variable') => void
   colorScheme: ColorScheme; onColorSchemeChange: (c: ColorScheme) => void
   corners: 'none' | 'round'; onCornersChange: (c: 'none' | 'round') => void
   drawerMode: 'floating' | 'embedded' | 'collapse'; onDrawerModeChange: (d: 'floating' | 'embedded' | 'collapse') => void
-  chatFill: 'filled' | 'empty'; onChatFillChange: (f: 'filled' | 'empty') => void
+  chatDockPolicy: ChatDockPolicy; onChatDockPolicyChange: (p: ChatDockPolicy) => void
 }) {
   const [open, setOpen] = useState(false)
 
@@ -1853,12 +1931,12 @@ function PrototypeOptions({
               value={drawerMode} onChange={onDrawerModeChange}
             />
             <OptionRow
-              label="Chat panel"
+              label="AI dock"
               options={[
-                { value: 'filled', label: 'Filled' },
-                { value: 'empty', label: 'Empty' },
+                { value: 'always_right', label: 'Always right' },
+                { value: 'right_and_left', label: 'Right & left' },
               ]}
-              value={chatFill} onChange={onChatFillChange}
+              value={chatDockPolicy} onChange={onChatDockPolicyChange}
             />
           </motion.div>
         )}

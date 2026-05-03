@@ -3,6 +3,7 @@ import { ChevronLeft } from 'lucide-react'
 import { Icon } from '@/components/Icon'
 import { CHAT_PANEL_DEFAULT_TITLE } from '@/components/ChatPanel'
 import { DashboardChartsGrid } from '@/components/pages/dashboardBetaCharts'
+import type { ChatDockPolicy } from '@/prototypeDefaults'
 
 const SAVE_BRAND = '#7a005d'
 
@@ -11,6 +12,9 @@ interface CanvasPageProps {
   onExpandCanvasLeftChat?: () => void
   dashboardEditMode?: boolean
   canvasEdgeShadow?: 'none' | 'left' | 'right' | 'ambient'
+  chatDockPolicy?: ChatDockPolicy
+  /** Opens canvas dashboard edit (same as Beta dashboard Edit). */
+  onEnterEdit?: () => void
 }
 
 const SHADOW_L = '-14px 0 48px rgba(0,0,0,0.14), -6px 0 22px rgba(0,0,0,0.09)'
@@ -22,6 +26,8 @@ export const CanvasPage = memo(function CanvasPage({
   onExpandCanvasLeftChat,
   dashboardEditMode,
   canvasEdgeShadow = 'none',
+  chatDockPolicy = 'right_and_left',
+  onEnterEdit,
 }: CanvasPageProps) {
   const editCanvasShadow =
     canvasEdgeShadow === 'left'
@@ -78,40 +84,96 @@ export const CanvasPage = memo(function CanvasPage({
             }}>{dashboardEditMode ? 'Editing' : 'Live'}</span>
           </div>
           <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-            {['This month', 'Q1 2026', 'YTD'].map((label, i) => (
-              <button key={label} type="button" style={{
-                padding: '5px 12px', borderRadius: 6, border: '1px solid #e0e0e0',
-                background: i === 0 ? '#111' : '#fff',
-                color: i === 0 ? '#fff' : '#555',
-                fontSize: 12, fontWeight: 400, cursor: 'pointer',
-              }}>
-                {label}
-              </button>
-            ))}
-            {dashboardEditMode && (
-              <button
-                type="button"
-                title="Save dashboard"
-                style={{
-                  height: 32,
-                  padding: '0 14px',
-                  borderRadius: 6,
-                  border: 'none',
-                  background: SAVE_BRAND,
-                  fontSize: 13,
-                  fontWeight: 500,
-                  color: '#fff',
-                  cursor: 'pointer',
-                  fontFamily: 'inherit',
-                  display: 'inline-flex',
-                  alignItems: 'center',
-                  gap: 6,
-                  flexShrink: 0,
-                }}
-              >
-                <Icon name="save" size={16} style={{ color: '#fff' }} />
-                Save
-              </button>
+            {chatDockPolicy === 'always_right' ? (
+              <>
+                {!dashboardEditMode ? (
+                  <button
+                    type="button"
+                    title="Edit dashboard"
+                    disabled={!onEnterEdit}
+                    onClick={() => onEnterEdit?.()}
+                    style={{
+                      width: 32,
+                      height: 32,
+                      borderRadius: 6,
+                      border: '1px solid #e0e0e0',
+                      background: '#fff',
+                      display: 'flex',
+                      alignItems: 'center',
+                      justifyContent: 'center',
+                      cursor: onEnterEdit ? 'pointer' : 'default',
+                      flexShrink: 0,
+                      padding: 0,
+                      color: '#111',
+                      opacity: onEnterEdit ? 1 : 0.45,
+                    }}
+                  >
+                    <Icon name="edit" size={18} />
+                  </button>
+                ) : (
+                  <button
+                    type="button"
+                    title="Save dashboard"
+                    style={{
+                      height: 32,
+                      padding: '0 14px',
+                      borderRadius: 6,
+                      border: 'none',
+                      background: SAVE_BRAND,
+                      fontSize: 13,
+                      fontWeight: 500,
+                      color: '#fff',
+                      cursor: 'pointer',
+                      fontFamily: 'inherit',
+                      display: 'inline-flex',
+                      alignItems: 'center',
+                      gap: 6,
+                      flexShrink: 0,
+                    }}
+                  >
+                    <Icon name="save" size={16} style={{ color: '#fff' }} />
+                    Save
+                  </button>
+                )}
+              </>
+            ) : (
+              <>
+                {['This month', 'Q1 2026', 'YTD'].map((label, i) => (
+                  <button key={label} type="button" style={{
+                    padding: '5px 12px', borderRadius: 6, border: '1px solid #e0e0e0',
+                    background: i === 0 ? '#111' : '#fff',
+                    color: i === 0 ? '#fff' : '#555',
+                    fontSize: 12, fontWeight: 400, cursor: 'pointer',
+                  }}>
+                    {label}
+                  </button>
+                ))}
+                {dashboardEditMode && (
+                  <button
+                    type="button"
+                    title="Save dashboard"
+                    style={{
+                      height: 32,
+                      padding: '0 14px',
+                      borderRadius: 6,
+                      border: 'none',
+                      background: SAVE_BRAND,
+                      fontSize: 13,
+                      fontWeight: 500,
+                      color: '#fff',
+                      cursor: 'pointer',
+                      fontFamily: 'inherit',
+                      display: 'inline-flex',
+                      alignItems: 'center',
+                      gap: 6,
+                      flexShrink: 0,
+                    }}
+                  >
+                    <Icon name="save" size={16} style={{ color: '#fff' }} />
+                    Save
+                  </button>
+                )}
+              </>
             )}
           </div>
         </div>

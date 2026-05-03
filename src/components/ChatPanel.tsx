@@ -1,6 +1,7 @@
 import React, { useState, useRef, useEffect, useLayoutEffect, useCallback } from 'react'
-import { motion, AnimatePresence } from 'motion/react'
+import { motion, AnimatePresence, useAnimationControls } from 'motion/react'
 import { Icon } from './Icon'
+import type { ChatDockPolicy } from '../prototypeDefaults'
 import { AIComposerInput } from './AIComposerInput'
 import { useContainerWidth } from '../hooks/useContainerWidth'
 import type { Mode } from './ModeBar'
@@ -17,6 +18,7 @@ import { inferScheduleIntent, SchedulePreviewArtifact } from './chat-artifacts/s
 import { WorkflowCanvasView, WORKFLOW_CANVAS_DISPLAY_NAME } from './WorkflowCanvasView'
 import { ScheduleCanvasView, SCHEDULE_CANVAS_DISPLAY_NAME } from './ScheduleCanvasView'
 import { ReportBuilderEditMode, REPORT_BUILDER_DISPLAY_NAME, REPORT_BUILDER_HEADER_HEIGHT_PX } from './ReportBuilderEditMode'
+import { RipplingAiPebbleIcon } from './icons/RipplingAiPebbleIcon'
 
 // ─── Types ──────────────────────────────────────────────────────────────────
 
@@ -1003,6 +1005,15 @@ interface ChatPanelProps {
   /** Shell nav — increment nonce + set kind to open fullscreen chat + report/workflow rail. */
   navSplitBootstrapNonce?: number
   navSplitBootstrapKind?: 'reports' | 'workflows' | null
+  /**
+   * Full-screen / docked split beside report, workflow, or schedule:
+   * `always_right` keeps Rippling AI on the **right** (content on the left).
+   * `right_and_left` keeps the legacy layout (chat on the **left**, content on the right).
+   */
+  chatDockPolicy?: ChatDockPolicy
+  /** When set with `onSplitChatColumnHiddenChange`, syncs hide/show of the chat column beside report/workflow/schedule (ModeBar AI toggle). */
+  splitChatColumnHidden?: boolean
+  onSplitChatColumnHiddenChange?: (hidden: boolean) => void
 }
 
 // ─── Chat / report split (full-screen chat + docked sidebar chat) ──────────
@@ -1012,13 +1023,20 @@ const SPLIT_GRIP_PX = 6
 const SIDE_BY_SIDE_CHAT_MIN_PX = 320
 /** Default width when opening side-by-side (user can resize down to {@link SIDE_BY_SIDE_CHAT_MIN_PX}). */
 const SIDE_BY_SIDE_CHAT_DEFAULT_PX = 474
-/** Minimum share of the split row for workflow / report canvas (50%). */
-const SIDE_BY_SIDE_CANVAS_MIN_FRACTION = 0.5
+/** Minimum width of the report / workflow / schedule rail when resizing (pairs with chat min). */
+const SIDE_BY_SIDE_CANVAS_MIN_PX = 320
+/**
+ * `always_right`: rail starts this far **right** (from its settled position) so the canvas clearly sweeps
+ * left and takes over the stage — reads as continuation from Rippling AI on the right.
+ */
+const ALWAYS_RIGHT_RAIL_ENTER_OFFSET_PX = 420
 /** Default initial chat width beside workflow / report (export for shell docs). */
 export const WORKFLOW_CHAT_PANEL_WIDTH_PX = SIDE_BY_SIDE_CHAT_DEFAULT_PX
 const HISTORY_SIDEBAR_W = 260
 /** Extra chrome row spanning chat + report when split — close top-right; reconciles duplicate rail actions. */
 export const SPLIT_UNIFIED_HEADER_HEIGHT_PX = 44
+/** Matches shell split breadcrumbs for canvas dashboard edit beside chat. */
+const CANVAS_DASHBOARD_EDIT_CONTEXT = 'People analytics'
 
 // ─── Style helpers ───────────────────────────────────────────────────────────
 
@@ -1052,6 +1070,39 @@ const AI_COMP_DOCKED = {
   muted: '#716f6c',
   userBubble: '#f2eeeb',
 } as const
+
+/** Prompt tiles in empty hero — matches AI-components empty chat density & stroke (file AI-components). */
+function emptyHeroPromptStyle(aiCompDocked: boolean): React.CSSProperties {
+  return {
+    width: '100%',
+    textAlign: 'left',
+    padding: '12px 16px',
+    borderRadius: 10,
+    border: `1px solid ${aiCompDocked ? AI_COMP_DOCKED.divider : 'var(--grey-200)'}`,
+    background: '#ffffff',
+    color: aiCompDocked ? AI_COMP_DOCKED.ink : '#1a1a1a',
+    fontSize: 13,
+    fontWeight: 400,
+    cursor: 'pointer',
+    fontFamily: 'inherit',
+    lineHeight: 1.45,
+    letterSpacing: '-0.1px',
+    boxShadow: 'var(--shadow-sm)',
+    transition: 'background 0.15s ease, border-color 0.15s ease, box-shadow 0.15s ease',
+  }
+}
+
+function emptyHeroPromptHoverEnter(aiCompDocked: boolean, el: HTMLElement) {
+  el.style.background = aiCompDocked ? '#faf9f8' : 'var(--grey-50)'
+  el.style.borderColor = aiCompDocked ? '#d4d0cc' : 'var(--grey-300)'
+  el.style.boxShadow = 'var(--shadow-md)'
+}
+
+function emptyHeroPromptHoverLeave(aiCompDocked: boolean, el: HTMLElement) {
+  el.style.background = '#ffffff'
+  el.style.borderColor = aiCompDocked ? AI_COMP_DOCKED.divider : 'var(--grey-200)'
+  el.style.boxShadow = 'var(--shadow-sm)'
+}
 
 function formatChatMessageText(
   text: string,
@@ -1214,7 +1265,7 @@ const ORIENTATION_OPTIONS: { label: string; value: ChatOrientation; icon: string
   { label: 'Floating',   value: 'floating',   icon: 'picture_in_picture' },
 ]
 
-export function ChatPanel({ mode, orientation = 'sidebar', onOrientationChange, onClose, initialQuery, elevation = 'base', panelBg = 'var(--grey-50)', chatFill = 'filled', onReportFullscreen, onOpenReportInEditMode, onOpenReportCreatedPage, canvasDashboardHero = false, onOpenDashboardEditMode, canvasDashboardEditHero = false, onSplitCanvasOpenChange, onCollapseDashboardSideChat, scheduleCanvasShellSplit = false, onOpenScheduleShellSplit, navSplitBootstrapNonce = 0, navSplitBootstrapKind = null }: ChatPanelProps) {
+export function ChatPanel({ mode, orientation = 'sidebar', onOrientationChange, onClose, initialQuery, elevation = 'base', panelBg = 'var(--grey-50)', chatFill = 'filled', onReportFullscreen, onOpenReportInEditMode, onOpenReportCreatedPage, canvasDashboardHero = false, onOpenDashboardEditMode, canvasDashboardEditHero = false, onSplitCanvasOpenChange, onCollapseDashboardSideChat, scheduleCanvasShellSplit = false, onOpenScheduleShellSplit, navSplitBootstrapNonce = 0, navSplitBootstrapKind = null, chatDockPolicy = 'right_and_left', splitChatColumnHidden: splitChatColumnHiddenProp, onSplitChatColumnHiddenChange }: ChatPanelProps) {
   const [messages, setMessages] = useState<Message[]>(() => {
     if (initialQuery) {
       return [
@@ -1236,6 +1287,8 @@ export function ChatPanel({ mode, orientation = 'sidebar', onOrientationChange, 
   const [showReportPanel, setShowReportPanel] = useState(false)
   const [showWorkflowPanel, setShowWorkflowPanel] = useState(false)
   const [showSchedulePanel, setShowSchedulePanel] = useState(false)
+  /** When the report rail opens from a chart artifact click, show that preset’s title on the composer chip. */
+  const [reportRailArtifactTitle, setReportRailArtifactTitle] = useState<string | null>(null)
   /** Resizable chat column width (px) when workflow/report is open beside chat. */
   const [sideBySideChatWidthPx, setSideBySideChatWidthPx] = useState<number | null>(null)
   const [reportSplitDragging, setReportSplitDragging] = useState(false)
@@ -1247,7 +1300,11 @@ export function ChatPanel({ mode, orientation = 'sidebar', onOrientationChange, 
   const messagesRef    = useRef<HTMLDivElement>(null)
   const isMounted      = useRef(false)
   const lastNavSplitNonceRef = useRef(0)
+  /** Swapping report ↔ workflow ↔ schedule: exiting canvas stays under the incoming sweep (see split rail inner AnimatePresence). */
+  const splitCanvasReplaceRef = useRef(false)
   const cw = useContainerWidth(messagesRef)
+  /** `right_and_left`: slide chat + canvas strip together from the right so the canvas feels tethered to the thread. */
+  const splitPairRowControls = useAnimationControls()
 
   useEffect(() => { isMounted.current = true }, [])
 
@@ -1322,36 +1379,101 @@ export function ChatPanel({ mode, orientation = 'sidebar', onOrientationChange, 
   /** Match workflow split rail: 52px header, 13px title — includes canvas dashboard edit beside chat. */
   const copilotSplitRailHeader =
     workflowLikeSplitBesideChat || (Boolean(canvasDashboardEditHero) && aiCompDocked)
+  /** Canvas dashboard / WIW schedule shell beside docked chat — match {@link CanvasPage} title bar height (50px). */
+  const copilotCanvasShellDocked =
+    aiCompDocked && (Boolean(canvasDashboardEditHero) || Boolean(scheduleCanvasShellSplit))
+  const copilotChromeHeaderHeightPx =
+    splitRailHalfHalf || workflowLikeSplitBesideChat
+      ? REPORT_BUILDER_HEADER_HEIGHT_PX
+      : copilotCanvasShellDocked
+        ? 50
+        : aiCompDocked
+          ? 40
+          : 44
   /** Dashboard canvas edit beside docked chat — match workflow/report split header (double chevron hides chat). */
   const dashboardSideBySideDocked =
     (Boolean(canvasDashboardEditHero) || Boolean(scheduleCanvasShellSplit)) && aiCompDocked
+  /** Report / workflow / schedule rail open beside the thread (full-screen or docked copilot). */
+  const splitBesideCanvasRails =
+    splitReportWithChat &&
+    splitCanvasOpen &&
+    (showReportPanel || showWorkflowPanel || showSchedulePanel)
+  /** Prototype: `always_right` keeps AI on the **right**; legacy `right_and_left` keeps chat on the **left** of the pair. */
+  const sideBySideChatVisuallyRight =
+    chatDockPolicy === 'always_right' && splitBesideCanvasRails
+  /**
+   * Subtle strip slide for `right_and_left` only. `always_right` uses a dedicated rail enter (see split rail
+   * motion) so the canvas visibly sweeps in from the chat side — double motion looked inert / conflicting.
+   */
+  useEffect(() => {
+    if (splitBesideCanvasRails && chatDockPolicy !== 'always_right') {
+      splitPairRowControls.start({
+        x: [44, 0],
+        transition: {
+          x: { duration: 0.52, ease: [0.22, 1, 0.36, 1] },
+        },
+      })
+    } else {
+      splitPairRowControls.set({ x: 0 })
+    }
+  }, [splitBesideCanvasRails, chatDockPolicy, splitPairRowControls])
   const chatHeaderHideColumnUi =
     (splitReportWithChat && splitCanvasOpen) || dashboardSideBySideDocked
   const activeChatTitle = CHAT_HISTORY.find((c) => c.id === activeHistoryId)?.title ?? 'Chat'
 
+  const railContextTitle = splitBesideCanvasRails
+    ? showSchedulePanel
+      ? SCHEDULE_CANVAS_DISPLAY_NAME
+      : showWorkflowPanel
+        ? WORKFLOW_CANVAS_DISPLAY_NAME
+        : reportRailArtifactTitle ?? REPORT_BUILDER_DISPLAY_NAME
+    : null
+  const shellDockedSplitContextTitle =
+    !railContextTitle && scheduleCanvasShellSplit
+      ? SCHEDULE_CANVAS_DISPLAY_NAME
+      : !railContextTitle && canvasDashboardEditHero
+        ? CANVAS_DASHBOARD_EDIT_CONTEXT
+        : null
+  const chromeChatPrimaryTitle = railContextTitle ?? shellDockedSplitContextTitle ?? activeChatTitle
+  const chromeChatShowsContextSuffix = Boolean(railContextTitle ?? shellDockedSplitContextTitle)
+
   const hideReportSplit = useCallback(() => {
+    splitCanvasReplaceRef.current = false
     setShowReportPanel(false)
+    setReportRailArtifactTitle(null)
     setSideBySideChatWidthPx(null)
   }, [])
 
   const hideWorkflowSplit = useCallback(() => {
+    splitCanvasReplaceRef.current = false
     setShowWorkflowPanel(false)
     setSideBySideChatWidthPx(null)
   }, [])
 
   const hideScheduleSplit = useCallback(() => {
+    splitCanvasReplaceRef.current = false
     setShowSchedulePanel(false)
     setSideBySideChatWidthPx(null)
   }, [])
 
   /** While workflow/report is open beside chat, header Close hides only the chat column (canvas stays). */
-  const [chatHiddenBesideSplit, setChatHiddenBesideSplit] = useState(false)
+  const [splitHiddenInternal, setSplitHiddenInternal] = useState(false)
+  const splitHiddenControlled =
+    splitChatColumnHiddenProp !== undefined && onSplitChatColumnHiddenChange !== undefined
+  const chatHiddenBesideSplit = splitHiddenControlled ? Boolean(splitChatColumnHiddenProp) : splitHiddenInternal
+  const setChatHiddenBesideSplit = useCallback(
+    (next: boolean) => {
+      if (splitHiddenControlled) onSplitChatColumnHiddenChange!(next)
+      else setSplitHiddenInternal(next)
+    },
+    [splitHiddenControlled, splitChatColumnHiddenProp, onSplitChatColumnHiddenChange],
+  )
   const showChatColumn =
     !splitReportWithChat || !splitCanvasOpen || !chatHiddenBesideSplit
 
   useEffect(() => {
     if (!showWorkflowPanel && !showReportPanel && !showSchedulePanel) setChatHiddenBesideSplit(false)
-  }, [showWorkflowPanel, showReportPanel, showSchedulePanel])
+  }, [showWorkflowPanel, showReportPanel, showSchedulePanel, setChatHiddenBesideSplit])
 
   useEffect(() => {
     onSplitCanvasOpenChange?.(Boolean(showWorkflowPanel || showReportPanel || showSchedulePanel))
@@ -1359,19 +1481,38 @@ export function ChatPanel({ mode, orientation = 'sidebar', onOrientationChange, 
 
   useEffect(() => {
     if (!navSplitBootstrapNonce || navSplitBootstrapNonce <= lastNavSplitNonceRef.current) return
-    if (navSplitBootstrapKind !== 'reports' && navSplitBootstrapKind !== 'workflows') return
     lastNavSplitNonceRef.current = navSplitBootstrapNonce
+    /** App navigated Home (or cleared nav split): tear down rails without forcing sidebar — parent keeps fullscreen chat. */
+    if (navSplitBootstrapKind !== 'reports' && navSplitBootstrapKind !== 'workflows') {
+      hideReportSplit()
+      hideWorkflowSplit()
+      hideScheduleSplit()
+      setChatHiddenBesideSplit(false)
+      return
+    }
     setChatHiddenBesideSplit(false)
+    splitCanvasReplaceRef.current =
+      showReportPanel || showWorkflowPanel || showSchedulePanel
     setShowSchedulePanel(false)
     if (navSplitBootstrapKind === 'reports') {
       setShowWorkflowPanel(false)
+      setReportRailArtifactTitle(null)
       setShowReportPanel(true)
     } else {
       setShowReportPanel(false)
+      setReportRailArtifactTitle(null)
       setShowWorkflowPanel(true)
     }
     onOrientationChange?.('fullscreen')
-  }, [navSplitBootstrapNonce, navSplitBootstrapKind, onOrientationChange])
+  }, [
+    navSplitBootstrapNonce,
+    navSplitBootstrapKind,
+    onOrientationChange,
+    hideReportSplit,
+    hideWorkflowSplit,
+    hideScheduleSplit,
+    setChatHiddenBesideSplit,
+  ])
 
   useEffect(() => {
     if (sideBySideActive) setShowHistory(false)
@@ -1393,6 +1534,7 @@ export function ChatPanel({ mode, orientation = 'sidebar', onOrientationChange, 
     dashboardSideBySideDocked,
     onCollapseDashboardSideChat,
     onClose,
+    setChatHiddenBesideSplit,
   ])
 
   const railOnlyWorkflowOrReport =
@@ -1407,10 +1549,33 @@ export function ChatPanel({ mode, orientation = 'sidebar', onOrientationChange, 
     onOrientationChange?.('sidebar')
   }, [hideReportSplit, hideWorkflowSplit, hideScheduleSplit, onOrientationChange])
 
+  /** Composer chip dismiss — same as closing the artifact rails, without changing chat orientation. */
+  const dismissComposerArtifactContext = useCallback(() => {
+    hideReportSplit()
+    hideWorkflowSplit()
+    hideScheduleSplit()
+    setChatHiddenBesideSplit(false)
+  }, [hideReportSplit, hideWorkflowSplit, hideScheduleSplit, setChatHiddenBesideSplit])
+
   const showUnifiedSplitChrome =
     splitReportWithChat && (showReportPanel || showWorkflowPanel || showSchedulePanel)
 
-  /** Clamp chat width: min 320px; canvas/workflow keeps ≥50% of split row (minus grip). */
+  const artifactSplitBreadcrumbSegments = showSchedulePanel
+    ? (['Scheduling', 'WIW', SCHEDULE_CANVAS_DISPLAY_NAME] as const)
+    : showWorkflowPanel
+      ? (['Workflows', 'Payroll', WORKFLOW_CANVAS_DISPLAY_NAME] as const)
+      : ([
+          'Dashboards & Reports',
+          'Reports',
+          reportRailArtifactTitle ?? REPORT_BUILDER_DISPLAY_NAME,
+        ] as const)
+
+  const showUnifiedSplitChromeBar = showUnifiedSplitChrome && !sideBySideChatVisuallyRight
+
+  const alwaysRightSplitCloseFromChat = sideBySideChatVisuallyRight && chatHeaderHideColumnUi
+  const dockedSplitHideChatChevron = chatHeaderHideColumnUi && !sideBySideChatVisuallyRight
+
+  /** Clamp chat width: min 320px chat, min 320px canvas rail (minus grip); below ~646px inner width mins relax. */
   const clampSideBySideChatWidth = useCallback((w: number) => {
     const root = splitLayoutRef.current
     const historyW = isFullChat && showHistoryUi ? HISTORY_SIDEBAR_W : 0
@@ -1420,12 +1585,14 @@ export function ChatPanel({ mode, orientation = 'sidebar', onOrientationChange, 
         : typeof window !== 'undefined'
           ? window.innerWidth - historyW
           : 1200
-    const minCanvasPx = inner * SIDE_BY_SIDE_CANVAS_MIN_FRACTION
-    const maxChatPx = inner - minCanvasPx - SPLIT_GRIP_PX
     const minChatPx = SIDE_BY_SIDE_CHAT_MIN_PX
-    if (maxChatPx <= 0) return Math.max(0, w)
-    if (maxChatPx < minChatPx) return Math.min(Math.max(w, 0), maxChatPx)
-    return Math.min(Math.max(w, minChatPx), maxChatPx)
+    const minCanvasPx = SIDE_BY_SIDE_CANVAS_MIN_PX
+    const maxChatPx = inner - minCanvasPx - SPLIT_GRIP_PX
+    if (maxChatPx <= 0) {
+      return Math.max(0, Math.min(w, Math.max(0, inner - SPLIT_GRIP_PX)))
+    }
+    const low = Math.min(minChatPx, maxChatPx)
+    return Math.min(Math.max(w, low), maxChatPx)
   }, [isFullChat, showHistoryUi])
 
   const effectiveSideBySideChatPx =
@@ -1491,11 +1658,12 @@ export function ChatPanel({ mode, orientation = 'sidebar', onOrientationChange, 
   const splitGripPointerMove = useCallback(
     (e: React.PointerEvent) => {
       if (!reportSplitDrag.current) return
-      const delta = e.clientX - reportSplitDrag.current.startX
+      const raw = e.clientX - reportSplitDrag.current.startX
+      const delta = sideBySideChatVisuallyRight ? -raw : raw
       const next = clampSideBySideChatWidth(reportSplitDrag.current.startChatW + delta)
       setSideBySideChatWidthPx(next)
     },
-    [clampSideBySideChatWidth],
+    [clampSideBySideChatWidth, sideBySideChatVisuallyRight],
   )
 
   const reportSplitPointerUp = useCallback((e: React.PointerEvent) => {
@@ -1508,6 +1676,53 @@ export function ChatPanel({ mode, orientation = 'sidebar', onOrientationChange, 
       /* released */
     }
   }, [])
+
+  /** Inner canvas swap: incoming uses rail enter slide; outgoing stays put until timing completes (layered absolute). */
+  const replacingSplitCanvas = splitCanvasReplaceRef.current && !reportSplitDragging
+  const splitRailInnerInitial =
+    replacingSplitCanvas
+      ? {
+          x: sideBySideChatVisuallyRight
+            ? ALWAYS_RIGHT_RAIL_ENTER_OFFSET_PX
+            : -ALWAYS_RIGHT_RAIL_ENTER_OFFSET_PX,
+          opacity: 1,
+        }
+      : false
+  const splitRailInnerExit = replacingSplitCanvas
+    ? {
+        opacity: 1,
+        x: 0,
+        transition: { duration: 0.48, ease: [0.22, 1, 0.36, 1] as const },
+      }
+    : sideBySideChatVisuallyRight
+      ? {
+          x: Math.round(ALWAYS_RIGHT_RAIL_ENTER_OFFSET_PX * 0.45),
+          opacity: 0,
+        }
+      : {
+          opacity: 0,
+          x: -20,
+        }
+  const splitRailInnerTransition = reportSplitDragging
+    ? { duration: 0 }
+    : sideBySideChatVisuallyRight
+      ? {
+          x: { type: 'spring' as const, stiffness: 188, damping: 26, mass: 1.05 },
+          opacity: { duration: 0.3, ease: [0.22, 1, 0.36, 1] },
+        }
+      : {
+          opacity: { duration: 0.22, ease: [0.22, 1, 0.36, 1] },
+          x: { duration: 0.28, ease: [0.22, 1, 0.36, 1] },
+        }
+
+  /** Drop swap intent after the inner sweep so idle state doesn’t keep “replace” styling stuck on. */
+  useEffect(() => {
+    if (!splitCanvasReplaceRef.current) return
+    const id = window.setTimeout(() => {
+      splitCanvasReplaceRef.current = false
+    }, 520)
+    return () => clearTimeout(id)
+  }, [showReportPanel, showWorkflowPanel, showSchedulePanel])
 
   // Re-seed when chatFill changes, or when `initialQuery` is cleared (stale pending message was hiding empty-state CTAs).
   useEffect(() => {
@@ -1584,6 +1799,24 @@ export function ChatPanel({ mode, orientation = 'sidebar', onOrientationChange, 
     }, 800)
   }
 
+  const artifactComposerChipText =
+    showSchedulePanel
+      ? SCHEDULE_CANVAS_DISPLAY_NAME
+      : showWorkflowPanel
+        ? WORKFLOW_CANVAS_DISPLAY_NAME
+        : showReportPanel
+          ? reportRailArtifactTitle ?? REPORT_BUILDER_DISPLAY_NAME
+          : null
+
+  const chromeTitleEl: React.ReactNode = chromeChatShowsContextSuffix ? (
+    <>
+      <span style={{ fontWeight: 500 }}>{chromeChatPrimaryTitle}</span>
+      <span style={{ color: aiCompDocked ? AI_COMP_DOCKED.muted : '#888', fontWeight: 400 }}> · Rippling AI</span>
+    </>
+  ) : (
+    chromeChatPrimaryTitle
+  )
+
   return (
     <div
       ref={splitLayoutRef}
@@ -1642,8 +1875,12 @@ export function ChatPanel({ mode, orientation = 'sidebar', onOrientationChange, 
       </AnimatePresence>
 
       {/* ── Chat + split rail share one canvas; unified chrome when report/workflow open ── */}
-      <div style={{ flex: 1, display: 'flex', flexDirection: 'column', minWidth: 0, minHeight: 0 }}>
-        {showUnifiedSplitChrome && (
+      <motion.div
+        animate={splitPairRowControls}
+        initial={false}
+        style={{ flex: 1, display: 'flex', flexDirection: 'column', minWidth: 0, minHeight: 0 }}
+      >
+        {showUnifiedSplitChromeBar && (
           <div
             style={{
               height: SPLIT_UNIFIED_HEADER_HEIGHT_PX,
@@ -1670,13 +1907,7 @@ export function ChatPanel({ mode, orientation = 'sidebar', onOrientationChange, 
             )}
             <UnifiedSplitBreadcrumbs
               aiCompDocked={aiCompDocked}
-              segments={
-                showSchedulePanel
-                  ? (['Scheduling', 'WIW', SCHEDULE_CANVAS_DISPLAY_NAME] as const)
-                  : showWorkflowPanel
-                    ? (['Workflows', 'Payroll', WORKFLOW_CANVAS_DISPLAY_NAME] as const)
-                    : (['Dashboards & Reports', 'Reports', REPORT_BUILDER_DISPLAY_NAME] as const)
-              }
+              segments={artifactSplitBreadcrumbSegments}
             />
             <motion.button
               type="button"
@@ -1691,7 +1922,15 @@ export function ChatPanel({ mode, orientation = 'sidebar', onOrientationChange, 
             </motion.button>
           </div>
         )}
-        <div style={{ flex: 1, display: 'flex', flexDirection: 'row', minHeight: 0, minWidth: 0 }}>
+        <div
+          style={{
+            flex: 1,
+            display: 'flex',
+            flexDirection: sideBySideChatVisuallyRight ? 'row-reverse' : 'row',
+            minHeight: 0,
+            minWidth: 0,
+          }}
+        >
       {/* ── CENTER: Main chat column (animated collapse beside workflow/report) ── */}
       <motion.div
         initial={false}
@@ -1734,7 +1973,9 @@ export function ChatPanel({ mode, orientation = 'sidebar', onOrientationChange, 
         }
         transition={
           splitReportWithChat && splitCanvasOpen
-            ? { type: 'spring', stiffness: 400, damping: 34, mass: 0.82 }
+            ? reportSplitDragging
+              ? { duration: 0 }
+              : { type: 'spring', stiffness: 400, damping: 34, mass: 0.82 }
             : { duration: 0 }
         }
         style={{
@@ -1755,11 +1996,7 @@ export function ChatPanel({ mode, orientation = 'sidebar', onOrientationChange, 
       <div
         style={{
           padding: aiCompDocked ? '0 16px' : '0 10px',
-          height: splitRailHalfHalf || copilotSplitRailHeader
-            ? REPORT_BUILDER_HEADER_HEIGHT_PX
-            : aiCompDocked
-              ? 40
-              : 44,
+          height: copilotChromeHeaderHeightPx,
           borderBottom: aiCompDocked ? `1px solid ${AI_COMP_DOCKED.divider}` : '1px solid #ebebeb',
           display: 'flex',
           alignItems: 'center',
@@ -1784,12 +2021,20 @@ export function ChatPanel({ mode, orientation = 'sidebar', onOrientationChange, 
               </motion.button>
             )}
 
-            {/* AI identity */}
-            <div style={{ width: 20, height: 20, borderRadius: '50%', background: '#111', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
-              <img src="/rippling-ai.png" width={10} height={10} style={{ display: 'block', filter: 'brightness(0) invert(1)' }} />
-            </div>
             <div style={{ flex: 1, display: 'flex', alignItems: 'center', gap: 6, minWidth: 0 }}>
-              <span style={{ fontSize: copilotSplitRailHeader ? 13 : aiCompDocked ? 14 : 13, fontWeight: 400, color: aiCompDocked ? AI_COMP_DOCKED.ink : '#111', letterSpacing: '-0.1px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{activeChatTitle}</span>
+              <span
+                style={{
+                  fontSize: copilotCanvasShellDocked || copilotSplitRailHeader ? 13 : aiCompDocked ? 14 : 13,
+                  fontWeight: 400,
+                  color: aiCompDocked ? AI_COMP_DOCKED.ink : '#111',
+                  letterSpacing: '-0.1px',
+                  overflow: 'hidden',
+                  textOverflow: 'ellipsis',
+                  whiteSpace: 'nowrap',
+                }}
+              >
+                {chromeTitleEl}
+              </span>
             </div>
 
             {/* New chat */}
@@ -1865,19 +2110,23 @@ export function ChatPanel({ mode, orientation = 'sidebar', onOrientationChange, 
               </div>
             )}
 
-            {/* Side-by-side: chevron = hide chat column; otherwise close exits docked chat */}
+            {/* Side-by-side: legacy dock uses chevron to hide chat column; always-right uses close to dismiss canvas */}
             {onClose && (
               <motion.button
-                onClick={handleChatHeaderClose}
+                onClick={alwaysRightSplitCloseFromChat ? closeSplitCanvas : handleChatHeaderClose}
                 whileHover={{ scale: 1.08 }} whileTap={{ scale: 0.94 }}
-                title={chatHeaderHideColumnUi ? 'Hide chat' : 'Close'}
-                aria-label={chatHeaderHideColumnUi ? 'Hide chat' : 'Close'}
+                title={
+                  dockedSplitHideChatChevron ? 'Hide chat' : alwaysRightSplitCloseFromChat ? 'Close side by side' : 'Close'
+                }
+                aria-label={
+                  dockedSplitHideChatChevron ? 'Hide chat' : alwaysRightSplitCloseFromChat ? 'Close side by side' : 'Close'
+                }
                 style={
                   chatHeaderHideColumnUi ? headerIconBtnSideBySide(false) : headerIconBtn(false)
                 }
               >
                 <Icon
-                  name={chatHeaderHideColumnUi ? 'keyboard_double_arrow_right' : 'close'}
+                  name={dockedSplitHideChatChevron ? 'keyboard_double_arrow_right' : 'close'}
                   size={18}
                 />
               </motion.button>
@@ -1911,7 +2160,7 @@ export function ChatPanel({ mode, orientation = 'sidebar', onOrientationChange, 
                   whiteSpace: 'nowrap',
                 }}
               >
-                {activeChatTitle}
+                {chromeTitleEl}
               </span>
             </div>
 
@@ -1988,20 +2237,24 @@ export function ChatPanel({ mode, orientation = 'sidebar', onOrientationChange, 
               </div>
             )}
 
-            {/* Side-by-side: chevron = hide chat; otherwise close exits fullscreen chat */}
+            {/* Side-by-side: legacy chevron hides chat; always-right close dismisses split */}
             {onClose && (
               <motion.button
                 type="button"
-                onClick={handleChatHeaderClose}
+                onClick={alwaysRightSplitCloseFromChat ? closeSplitCanvas : handleChatHeaderClose}
                 whileHover={{ scale: 1.08 }} whileTap={{ scale: 0.94 }}
-                title={chatHeaderHideColumnUi ? 'Hide chat' : 'Close'}
-                aria-label={chatHeaderHideColumnUi ? 'Hide chat' : 'Close'}
+                title={
+                  dockedSplitHideChatChevron ? 'Hide chat' : alwaysRightSplitCloseFromChat ? 'Close side by side' : 'Close'
+                }
+                aria-label={
+                  dockedSplitHideChatChevron ? 'Hide chat' : alwaysRightSplitCloseFromChat ? 'Close side by side' : 'Close'
+                }
                 style={
                   chatHeaderHideColumnUi ? headerIconBtnSideBySide(false) : headerIconBtn(false)
                 }
               >
                 <Icon
-                  name={chatHeaderHideColumnUi ? 'keyboard_double_arrow_right' : 'close'}
+                  name={dockedSplitHideChatChevron ? 'keyboard_double_arrow_right' : 'close'}
                   size={18}
                 />
               </motion.button>
@@ -2021,7 +2274,7 @@ export function ChatPanel({ mode, orientation = 'sidebar', onOrientationChange, 
             transition={{ type: 'spring', stiffness: 340, damping: 36 }}
             style={{
               position: 'absolute',
-              top: aiCompDocked ? 40 : 44, // below header
+              top: copilotChromeHeaderHeightPx, // below header
               left: 0, right: 0, bottom: 0,
               background: aiCompDocked ? AI_COMP_DOCKED.surface : panelBg,
               zIndex: 40,
@@ -2079,8 +2332,11 @@ export function ChatPanel({ mode, orientation = 'sidebar', onOrientationChange, 
         ref={messagesRef}
         style={{
           flex: 1,
+          minHeight: 0,
           overflowY: 'auto',
           background: aiCompDocked ? AI_COMP_DOCKED.surface : panelBg,
+          display: 'flex',
+          flexDirection: 'column',
         }}
       >
         {/* Inner column — capped at 730px in fullchat; 16px horizontal inset matches 448px mock (416 content). */}
@@ -2089,11 +2345,31 @@ export function ChatPanel({ mode, orientation = 'sidebar', onOrientationChange, 
           style={{
           maxWidth: isFullChat && !showWorkflowPanel && !showSchedulePanel ? 730 : 'none',
           margin: isFullChat && !showWorkflowPanel && !showSchedulePanel ? '0 auto' : undefined,
-          padding: isFullChat ? (showWorkflowPanel || showSchedulePanel ? '40px 14px' : '40px 16px') : aiCompDocked ? '16px 16px' : '16px 14px',
+          padding: showEmptyHero
+            ? isFullChat
+              ? '0 16px'
+              : aiCompDocked
+                ? '0 16px'
+                : '0 14px'
+            : isFullChat
+              ? showWorkflowPanel || showSchedulePanel
+                ? '40px 14px'
+                : '40px 16px'
+              : aiCompDocked
+                ? '16px 16px'
+                : '16px 14px',
           display: 'flex',
           flexDirection: 'column',
           gap: aiCompDocked ? 16 : 24,
           overflowX: isFullChat ? 'visible' : undefined,
+          ...(showEmptyHero
+            ? {
+                flex: 1,
+                minHeight: '100%',
+                justifyContent: 'center',
+                boxSizing: 'border-box',
+              }
+            : {}),
         }}
         >
         {/* ── Empty state hero ── */}
@@ -2106,30 +2382,53 @@ export function ChatPanel({ mode, orientation = 'sidebar', onOrientationChange, 
               exit={{ opacity: 0, y: -6, transition: { duration: 0.15 } }}
               transition={{ type: 'spring', stiffness: 340, damping: 30 }}
               style={{
-                flex: 1,
                 display: 'flex',
                 flexDirection: 'column',
-                alignItems: 'center',
+                alignItems: 'flex-start',
                 justifyContent: 'center',
-                gap: 20,
-                padding: '0 8px 32px',
-                minHeight: 0,
+                gap: 24,
+                padding: '16px 0',
+                width: '100%',
+                alignSelf: 'stretch',
+                flexShrink: 0,
               }}
             >
-              {/* Logo + title */}
-              <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 10 }}>
-                <img src="/rippling-ai.png" width={36} height={36} style={{ opacity: 0.85 }} />
-                <span style={{ fontSize: 16, fontWeight: 600, fontFamily: 'var(--font-heading)', color: '#111', letterSpacing: '-0.2px', textAlign: 'center', maxWidth: '100%', padding: '0 12px' }}>
-                  {canvasDashboardHero ? 'Rippling AI' : activeChatTitle}
-                </span>
-                <span style={{
-                  fontSize: 12,
-                  fontWeight: 300,
-                  fontFamily: 'var(--font-heading)',
-                  color: aiCompDocked ? AI_COMP_DOCKED.muted : '#aaa',
-                  textAlign: 'center',
-                  lineHeight: 1.5,
+              {/* Logo + title — left-aligned stack; header always “Rippling AI” per AI-components empty chat */}
+              <div
+                style={{
+                  display: 'flex',
+                  flexDirection: 'column',
+                  alignItems: 'flex-start',
+                  gap: 12,
+                  width: '100%',
+                  maxWidth: 420,
                 }}
+              >
+                <RipplingAiPebbleIcon height={aiCompDocked ? 24 : 28} color="var(--brand)" />
+                <span
+                  style={{
+                    fontSize: aiCompDocked ? 18 : 20,
+                    fontWeight: 600,
+                    fontFamily: 'var(--font-heading)',
+                    color: aiCompDocked ? AI_COMP_DOCKED.ink : '#111',
+                    letterSpacing: '-0.25px',
+                    textAlign: 'left',
+                    maxWidth: '100%',
+                    lineHeight: 1.25,
+                  }}
+                >
+                  Rippling AI
+                </span>
+                <span
+                  style={{
+                    fontSize: 14,
+                    fontWeight: 400,
+                    fontFamily: 'var(--font-heading)',
+                    color: aiCompDocked ? AI_COMP_DOCKED.muted : '#737373',
+                    textAlign: 'left',
+                    lineHeight: 1.45,
+                    maxWidth: 360,
+                  }}
                 >
                   {canvasDashboardEditHero
                     ? "Let's work on your dashboard"
@@ -2140,34 +2439,21 @@ export function ChatPanel({ mode, orientation = 'sidebar', onOrientationChange, 
               </div>
 
               {/* Sample prompts — canvas view-mode CTA vs edit-mode prompts vs default */}
-              <div style={{ display: 'flex', flexDirection: 'column', gap: 8, width: '100%', maxWidth: 280 }}>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 10, width: '100%', maxWidth: 420 }}>
                 {canvasDashboardHero && onOpenDashboardEditMode ? (
-                  <div style={{ display: 'flex', flexDirection: 'row', gap: 8, width: '100%' }}>
+                  <div style={{ display: 'flex', flexDirection: 'row', gap: 10, width: '100%' }}>
                     <button
                       type="button"
                       onClick={() => onOpenDashboardEditMode()}
                       style={{
+                        ...emptyHeroPromptStyle(aiCompDocked),
                         flex: 1,
+                        width: 'auto',
+                        minWidth: 0,
                         textAlign: 'center',
-                        padding: '10px 12px',
-                        borderRadius: 8,
-                        border: '1px solid var(--grey-200)',
-                        background: '#ffffff',
-                        color: '#333',
-                        fontSize: 12,
-                        fontWeight: 500,
-                        cursor: 'pointer',
-                        fontFamily: 'inherit',
-                        lineHeight: 1.4,
-                        boxShadow: '0 1px 2px rgba(0,0,0,0.06)',
-                        transition: 'background 0.1s, border-color 0.1s',
                       }}
-                      onMouseEnter={(e) => {
-                        (e.currentTarget as HTMLElement).style.background = 'var(--grey-50)'
-                      }}
-                      onMouseLeave={(e) => {
-                        (e.currentTarget as HTMLElement).style.background = '#ffffff'
-                      }}
+                      onMouseEnter={(e) => emptyHeroPromptHoverEnter(aiCompDocked, e.currentTarget)}
+                      onMouseLeave={(e) => emptyHeroPromptHoverLeave(aiCompDocked, e.currentTarget)}
                     >
                       Edit
                     </button>
@@ -2175,27 +2461,14 @@ export function ChatPanel({ mode, orientation = 'sidebar', onOrientationChange, 
                       type="button"
                       onClick={() => sendMessage('Summarize this dashboard')}
                       style={{
+                        ...emptyHeroPromptStyle(aiCompDocked),
                         flex: 1,
+                        width: 'auto',
+                        minWidth: 0,
                         textAlign: 'center',
-                        padding: '10px 12px',
-                        borderRadius: 8,
-                        border: '1px solid var(--grey-200)',
-                        background: '#ffffff',
-                        color: '#333',
-                        fontSize: 12,
-                        fontWeight: 500,
-                        cursor: 'pointer',
-                        fontFamily: 'inherit',
-                        lineHeight: 1.4,
-                        boxShadow: '0 1px 2px rgba(0,0,0,0.06)',
-                        transition: 'background 0.1s, border-color 0.1s',
                       }}
-                      onMouseEnter={(e) => {
-                        (e.currentTarget as HTMLElement).style.background = 'var(--grey-50)'
-                      }}
-                      onMouseLeave={(e) => {
-                        (e.currentTarget as HTMLElement).style.background = '#ffffff'
-                      }}
+                      onMouseEnter={(e) => emptyHeroPromptHoverEnter(aiCompDocked, e.currentTarget)}
+                      onMouseLeave={(e) => emptyHeroPromptHoverLeave(aiCompDocked, e.currentTarget)}
                     >
                       Summarize
                     </button>
@@ -2208,31 +2481,11 @@ export function ChatPanel({ mode, orientation = 'sidebar', onOrientationChange, 
                   ].map((prompt) => (
                     <button
                       key={prompt}
+                      type="button"
                       onClick={() => sendMessage(prompt)}
-                      style={{
-                        width: '100%',
-                        textAlign: 'left',
-                        padding: '9px 14px',
-                        borderRadius: 8,
-                        border: '1px solid var(--grey-200)',
-                        background: '#ffffff',
-                        color: '#333',
-                        fontSize: 12,
-                        fontWeight: 100,
-                        cursor: 'pointer',
-                        fontFamily: 'inherit',
-                        lineHeight: 1.4,
-                        boxShadow: '0 1px 2px rgba(0,0,0,0.06)',
-                        transition: 'background 0.1s, border-color 0.1s',
-                      }}
-                      onMouseEnter={(e) => {
-                        (e.currentTarget as HTMLElement).style.background = 'var(--grey-50)'
-                        ;(e.currentTarget as HTMLElement).style.borderColor = 'var(--grey-300)'
-                      }}
-                      onMouseLeave={(e) => {
-                        (e.currentTarget as HTMLElement).style.background = '#ffffff'
-                        ;(e.currentTarget as HTMLElement).style.borderColor = 'var(--grey-200)'
-                      }}
+                      style={emptyHeroPromptStyle(aiCompDocked)}
+                      onMouseEnter={(e) => emptyHeroPromptHoverEnter(aiCompDocked, e.currentTarget)}
+                      onMouseLeave={(e) => emptyHeroPromptHoverLeave(aiCompDocked, e.currentTarget)}
                     >
                       {prompt}
                     </button>
@@ -2246,31 +2499,11 @@ export function ChatPanel({ mode, orientation = 'sidebar', onOrientationChange, 
                   ].map((prompt) => (
                     <button
                       key={prompt}
+                      type="button"
                       onClick={() => sendMessage(prompt)}
-                      style={{
-                        width: '100%',
-                        textAlign: 'left',
-                        padding: '9px 14px',
-                        borderRadius: 8,
-                        border: '1px solid var(--grey-200)',
-                        background: '#ffffff',
-                        color: '#333',
-                        fontSize: 12,
-                        fontWeight: 100,
-                        cursor: 'pointer',
-                        fontFamily: 'inherit',
-                        lineHeight: 1.4,
-                        boxShadow: '0 1px 2px rgba(0,0,0,0.06)',
-                        transition: 'background 0.1s, border-color 0.1s',
-                      }}
-                      onMouseEnter={(e) => {
-                        (e.currentTarget as HTMLElement).style.background = 'var(--grey-50)'
-                        ;(e.currentTarget as HTMLElement).style.borderColor = 'var(--grey-300)'
-                      }}
-                      onMouseLeave={(e) => {
-                        (e.currentTarget as HTMLElement).style.background = '#ffffff'
-                        ;(e.currentTarget as HTMLElement).style.borderColor = 'var(--grey-200)'
-                      }}
+                      style={emptyHeroPromptStyle(aiCompDocked)}
+                      onMouseEnter={(e) => emptyHeroPromptHoverEnter(aiCompDocked, e.currentTarget)}
+                      onMouseLeave={(e) => emptyHeroPromptHoverLeave(aiCompDocked, e.currentTarget)}
                     >
                       {prompt}
                     </button>
@@ -2332,6 +2565,9 @@ export function ChatPanel({ mode, orientation = 'sidebar', onOrientationChange, 
 
           if (msg.type === 'schedule-preview') {
             const openScheduleSplit = () => {
+              splitCanvasReplaceRef.current =
+                showReportPanel || showWorkflowPanel || showSchedulePanel
+              setReportRailArtifactTitle(null)
               setShowReportPanel(false)
               setShowWorkflowPanel(false)
               setChatHiddenBesideSplit(false)
@@ -2388,6 +2624,9 @@ export function ChatPanel({ mode, orientation = 'sidebar', onOrientationChange, 
 
           if (msg.type === 'workflow-preview') {
             const openWorkflowSplit = () => {
+              splitCanvasReplaceRef.current =
+                showReportPanel || showWorkflowPanel || showSchedulePanel
+              setReportRailArtifactTitle(null)
               setShowReportPanel(false)
               setShowSchedulePanel(false)
               setChatHiddenBesideSplit(false)
@@ -2479,8 +2718,11 @@ export function ChatPanel({ mode, orientation = 'sidebar', onOrientationChange, 
                     const pid = (msg as ChartMessage).presetId
                     const chart = <ChartArtifactByPreset presetId={pid} fluid />
                     const openReport = () => {
+                      splitCanvasReplaceRef.current =
+                        showReportPanel || showWorkflowPanel || showSchedulePanel
                       setShowWorkflowPanel(false)
                       setShowSchedulePanel(false)
+                      setReportRailArtifactTitle(chartPresetTitle(pid))
                       if (isFullChat) {
                         setShowReportPanel(true)
                       } else if (aiCompDocked) {
@@ -2488,6 +2730,7 @@ export function ChatPanel({ mode, orientation = 'sidebar', onOrientationChange, 
                         onOrientationChange?.('fullscreen')
                         setShowReportPanel(true)
                       } else {
+                        setReportRailArtifactTitle(null)
                         onOpenReportInEditMode?.()
                       }
                     }
@@ -2574,36 +2817,56 @@ export function ChatPanel({ mode, orientation = 'sidebar', onOrientationChange, 
         </div>{/* end inner column */}
       </div>
 
-      {/* Suggestions — full chat only */}
-      {isFullChat && (
+      {/* Sample prompts — full chat only, hidden once the user has sent a message */}
+      {isFullChat &&
+        messages.every((m) => m.role !== 'user') &&
+        !showEmptyHero && (
         <motion.div
           initial={{ opacity: 0 }}
           animate={{ opacity: 1 }}
           style={{
             maxWidth: 730,
             margin: '0 auto',
-            padding: '0 16px 12px',
+            padding: '0 16px 14px',
             width: '100%',
             boxSizing: 'border-box',
             display: 'flex',
-            gap: 8,
+            gap: 10,
             flexWrap: 'wrap',
+            justifyContent: 'flex-start',
           }}
         >
           {SUGGESTED.map((s) => (
             <button
               key={s}
+              type="button"
               onClick={() => sendMessage(s)}
               style={{
-                padding: '7px 14px',
+                padding: '10px 16px',
                 borderRadius: 999,
-                border: '1px solid #e4e4e4',
-                background: '#fafafa',
-                color: '#555',
-                fontSize: 12,
+                border: '1px solid var(--grey-200)',
+                background: '#ffffff',
+                color: '#404040',
+                fontSize: 13,
+                fontWeight: 400,
+                letterSpacing: '-0.1px',
                 cursor: 'pointer',
-                fontWeight: 100,
                 fontFamily: 'inherit',
+                lineHeight: 1.35,
+                boxShadow: 'var(--shadow-sm)',
+                transition: 'background 0.15s ease, border-color 0.15s ease, box-shadow 0.15s ease',
+              }}
+              onMouseEnter={(e) => {
+                const el = e.currentTarget
+                el.style.background = 'var(--grey-50)'
+                el.style.borderColor = 'var(--grey-300)'
+                el.style.boxShadow = 'var(--shadow-md)'
+              }}
+              onMouseLeave={(e) => {
+                const el = e.currentTarget
+                el.style.background = '#ffffff'
+                el.style.borderColor = 'var(--grey-200)'
+                el.style.boxShadow = 'var(--shadow-sm)'
               }}
             >
               {s}
@@ -2683,6 +2946,10 @@ export function ChatPanel({ mode, orientation = 'sidebar', onOrientationChange, 
           onChange={setInput}
           onCaretActivity={handleComposerCaret}
           onSend={() => sendMessage(input)}
+          leadingChip={artifactComposerChipText || undefined}
+          onLeadingChipDismiss={
+            artifactComposerChipText ? dismissComposerArtifactContext : undefined
+          }
           style={
             isFullChat
               ? { maxWidth: 712, width: '100%', margin: '0 auto' }
@@ -2712,34 +2979,54 @@ export function ChatPanel({ mode, orientation = 'sidebar', onOrientationChange, 
       </div>
       </motion.div>
 
-      {/* ── RIGHT: Report builder or Workflow canvas + resize grip ── */}
+      {/* ── Split rail: report / workflow / schedule (direction anim follows dock policy) ── */}
       <AnimatePresence>
         {splitReportWithChat && (showReportPanel || showWorkflowPanel || showSchedulePanel) && (
           <motion.div
-            key={
-              showSchedulePanel
-                ? 'schedule-split-rail'
-                : showWorkflowPanel
-                  ? 'workflow-split-rail'
-                  : 'report-split-rail'
+            key="split-rail-shell"
+            initial={
+              sideBySideChatVisuallyRight && !reportSplitDragging
+                ? {
+                    x: ALWAYS_RIGHT_RAIL_ENTER_OFFSET_PX,
+                    opacity: 1,
+                  }
+                : false
             }
-            initial={{ opacity: 0 }}
-            animate={{ opacity: 1 }}
-            exit={{ opacity: 0 }}
+            animate={{ x: 0, opacity: 1 }}
+            exit={
+              sideBySideChatVisuallyRight
+                ? {
+                    x: Math.round(ALWAYS_RIGHT_RAIL_ENTER_OFFSET_PX * 0.45),
+                    opacity: 0,
+                  }
+                : {
+                    opacity: 0,
+                    x: -20,
+                  }
+            }
             transition={
               reportSplitDragging
                 ? { duration: 0 }
-                : { type: 'spring', stiffness: 380, damping: 38 }
+                : sideBySideChatVisuallyRight
+                  ? {
+                      x: { type: 'spring', stiffness: 188, damping: 26, mass: 1.05 },
+                      opacity: { duration: 0.3, ease: [0.22, 1, 0.36, 1] },
+                    }
+                  : {
+                      opacity: { duration: 0.22, ease: [0.22, 1, 0.36, 1] },
+                      x: { duration: 0.28, ease: [0.22, 1, 0.36, 1] },
+                    }
             }
             style={{
               flex: '1 1 0%',
               flexShrink: 1,
-              minWidth: `${SIDE_BY_SIDE_CANVAS_MIN_FRACTION * 100}%`,
+              minWidth: SIDE_BY_SIDE_CANVAS_MIN_PX,
               overflow: 'hidden',
               display: 'flex',
               flexDirection: 'row',
               background: '#fff',
-              borderLeft: '1px solid var(--grey-200)',
+              borderLeft: sideBySideChatVisuallyRight ? 'none' : '1px solid var(--grey-200)',
+              borderRight: sideBySideChatVisuallyRight ? '1px solid var(--grey-200)' : 'none',
             }}
           >
             {!railOnlyWorkflowOrReport && (
@@ -2759,6 +3046,8 @@ export function ChatPanel({ mode, orientation = 'sidebar', onOrientationChange, 
                   borderRight: '1px solid var(--grey-200)',
                   alignSelf: 'stretch',
                   background: reportSplitDragging ? 'rgba(122, 0, 93, 0.08)' : 'transparent',
+                  position: 'relative',
+                  zIndex: 4,
                 }}
               />
             )}
@@ -2769,55 +3058,136 @@ export function ChatPanel({ mode, orientation = 'sidebar', onOrientationChange, 
                 minHeight: 0,
                 display: 'flex',
                 flexDirection: 'column',
-                boxShadow: '-6px 0 28px rgba(0,0,0,0.08), -2px 0 10px rgba(0,0,0,0.04)',
+                position: 'relative',
+                /** Always-right: canvas is left — shadow falls toward chat on the right so depth reads as “added” from AI. */
+                boxShadow: sideBySideChatVisuallyRight
+                  ? '6px 0 36px rgba(0,0,0,0.07), 2px 0 14px rgba(0,0,0,0.05)'
+                  : '-6px 0 28px rgba(0,0,0,0.08), -2px 0 10px rgba(0,0,0,0.04)',
                 zIndex: 1,
               }}
             >
-              {showSchedulePanel ? (
-                <ScheduleCanvasView
-                  embeddedInChatSplit
-                  suppressEmbeddedNav={Boolean(showUnifiedSplitChrome)}
-                  embeddedTitleMatchChat
-                  embeddedTitleFontSize={aiCompDocked ? 14 : 13}
-                  embeddedTitleColor={aiCompDocked ? AI_COMP_DOCKED.ink : '#111'}
-                  onClose={hideScheduleSplit}
-                  onOpenChat={
-                    chatHiddenBesideSplit ? () => setChatHiddenBesideSplit(false) : undefined
-                  }
-                />
-              ) : showWorkflowPanel ? (
-                <WorkflowCanvasView
-                  embeddedInChatSplit
-                  suppressEmbeddedNav={Boolean(showUnifiedSplitChrome)}
-                  embeddedTitleMatchChat
-                  embeddedTitleFontSize={aiCompDocked ? 14 : 13}
-                  embeddedTitleColor={aiCompDocked ? AI_COMP_DOCKED.ink : '#111'}
-                  onClose={hideWorkflowSplit}
-                  onOpenChat={
-                    chatHiddenBesideSplit ? () => setChatHiddenBesideSplit(false) : undefined
-                  }
-                />
-              ) : (
-                <ReportBuilderEditMode
-                  embeddedInChatSplit
-                  omitAvailableDataPanel={splitRailHalfHalf}
-                  suppressEmbeddedNav={Boolean(showUnifiedSplitChrome)}
-                  embeddedTitleMatchChat
-                  embeddedTitleFontSize={aiCompDocked ? 14 : 13}
-                  embeddedTitleColor={aiCompDocked ? AI_COMP_DOCKED.ink : '#111'}
-                  onClose={hideReportSplit}
-                  onRequestFullscreen={() => {
-                    hideReportSplit()
-                    onReportFullscreen?.()
-                  }}
-                />
-              )}
+              <AnimatePresence initial={false}>
+                {showSchedulePanel && (
+                  <motion.div
+                    key="split-canvas-schedule"
+                    initial={splitRailInnerInitial}
+                    animate={{ x: 0, opacity: 1 }}
+                    exit={splitRailInnerExit}
+                    transition={splitRailInnerTransition}
+                    style={{
+                      position: 'absolute',
+                      inset: 0,
+                      display: 'flex',
+                      flexDirection: 'column',
+                      background: '#fff',
+                      minHeight: 0,
+                    }}
+                  >
+                    <ScheduleCanvasView
+                      embeddedInChatSplit
+                      suppressEmbeddedNav={Boolean(showUnifiedSplitChrome)}
+                      embeddedTitleMatchChat
+                      embeddedTitleFontSize={aiCompDocked ? 14 : 13}
+                      embeddedTitleColor={aiCompDocked ? AI_COMP_DOCKED.ink : '#111'}
+                      onClose={hideScheduleSplit}
+                      onOpenChat={
+                        chatHiddenBesideSplit ? () => setChatHiddenBesideSplit(false) : undefined
+                      }
+                      embeddedSplitBreadcrumbs={
+                        sideBySideChatVisuallyRight ? (
+                          <UnifiedSplitBreadcrumbs
+                            aiCompDocked={aiCompDocked}
+                            segments={artifactSplitBreadcrumbSegments}
+                          />
+                        ) : undefined
+                      }
+                    />
+                  </motion.div>
+                )}
+                {showWorkflowPanel && (
+                  <motion.div
+                    key="split-canvas-workflow"
+                    initial={splitRailInnerInitial}
+                    animate={{ x: 0, opacity: 1 }}
+                    exit={splitRailInnerExit}
+                    transition={splitRailInnerTransition}
+                    style={{
+                      position: 'absolute',
+                      inset: 0,
+                      display: 'flex',
+                      flexDirection: 'column',
+                      background: '#fff',
+                      minHeight: 0,
+                    }}
+                  >
+                    <WorkflowCanvasView
+                      embeddedInChatSplit
+                      suppressEmbeddedNav={Boolean(showUnifiedSplitChrome)}
+                      embeddedTitleMatchChat
+                      embeddedTitleFontSize={aiCompDocked ? 14 : 13}
+                      embeddedTitleColor={aiCompDocked ? AI_COMP_DOCKED.ink : '#111'}
+                      onClose={hideWorkflowSplit}
+                      onOpenChat={
+                        chatHiddenBesideSplit ? () => setChatHiddenBesideSplit(false) : undefined
+                      }
+                      embeddedSplitBreadcrumbs={
+                        sideBySideChatVisuallyRight ? (
+                          <UnifiedSplitBreadcrumbs
+                            aiCompDocked={aiCompDocked}
+                            segments={artifactSplitBreadcrumbSegments}
+                          />
+                        ) : undefined
+                      }
+                    />
+                  </motion.div>
+                )}
+                {showReportPanel && (
+                  <motion.div
+                    key="split-canvas-report"
+                    initial={splitRailInnerInitial}
+                    animate={{ x: 0, opacity: 1 }}
+                    exit={splitRailInnerExit}
+                    transition={splitRailInnerTransition}
+                    style={{
+                      position: 'absolute',
+                      inset: 0,
+                      display: 'flex',
+                      flexDirection: 'column',
+                      background: '#fff',
+                      minHeight: 0,
+                    }}
+                  >
+                    <ReportBuilderEditMode
+                      embeddedInChatSplit
+                      omitAvailableDataPanel={splitRailHalfHalf}
+                      suppressEmbeddedNav={Boolean(showUnifiedSplitChrome)}
+                      embeddedTitleMatchChat
+                      embeddedTitleFontSize={aiCompDocked ? 14 : 13}
+                      embeddedTitleColor={aiCompDocked ? AI_COMP_DOCKED.ink : '#111'}
+                      embeddedReportTitle={reportRailArtifactTitle ?? undefined}
+                      onClose={hideReportSplit}
+                      onRequestFullscreen={() => {
+                        hideReportSplit()
+                        onReportFullscreen?.()
+                      }}
+                      embeddedSplitBreadcrumbs={
+                        sideBySideChatVisuallyRight ? (
+                          <UnifiedSplitBreadcrumbs
+                            aiCompDocked={aiCompDocked}
+                            segments={artifactSplitBreadcrumbSegments}
+                          />
+                        ) : undefined
+                      }
+                    />
+                  </motion.div>
+                )}
+              </AnimatePresence>
             </div>
           </motion.div>
         )}
       </AnimatePresence>
         </div>{/* end split inner row */}
-      </div>{/* end canvas column wrapper */}
+      </motion.div>{/* end canvas column wrapper (chat + unified chrome + split row) */}
 
     </div>
   )
