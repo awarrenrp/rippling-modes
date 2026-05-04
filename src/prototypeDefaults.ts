@@ -43,7 +43,7 @@ export const PROTOTYPE_DEFAULTS = {
    * Shell canvas splits + full-screen / docked **ChatPanel** splits (reports, workflows, schedule):
    * `always_right` keeps Rippling AI on the **right**; `right_and_left` keeps legacy chat-left / canvas-right.
    */
-  chatDockPolicy: 'right_and_left' as ChatDockPolicy,
+  chatDockPolicy: 'always_right' as ChatDockPolicy,
   chatOpen: true,
   chatOrientation: 'sidebar' as ChatOrientation,
   activePage: null as PageId | null,

@@ -1018,7 +1018,7 @@ interface ChatPanelProps {
 
 // ─── Chat / report split (full-screen chat + docked sidebar chat) ──────────
 
-const SPLIT_GRIP_PX = 6
+const SPLIT_GRIP_PX = 10
 /** Chat column minimum when beside workflow or report (side-by-side). */
 const SIDE_BY_SIDE_CHAT_MIN_PX = 320
 /** Default width when opening side-by-side (user can resize down to {@link SIDE_BY_SIDE_CHAT_MIN_PX}). */
@@ -1265,7 +1265,7 @@ const ORIENTATION_OPTIONS: { label: string; value: ChatOrientation; icon: string
   { label: 'Floating',   value: 'floating',   icon: 'picture_in_picture' },
 ]
 
-export function ChatPanel({ mode, orientation = 'sidebar', onOrientationChange, onClose, initialQuery, elevation = 'base', panelBg = 'var(--grey-50)', chatFill = 'filled', onReportFullscreen, onOpenReportInEditMode, onOpenReportCreatedPage, canvasDashboardHero = false, onOpenDashboardEditMode, canvasDashboardEditHero = false, onSplitCanvasOpenChange, onCollapseDashboardSideChat, scheduleCanvasShellSplit = false, onOpenScheduleShellSplit, navSplitBootstrapNonce = 0, navSplitBootstrapKind = null, chatDockPolicy = 'right_and_left', splitChatColumnHidden: splitChatColumnHiddenProp, onSplitChatColumnHiddenChange }: ChatPanelProps) {
+export function ChatPanel({ mode, orientation = 'sidebar', onOrientationChange, onClose, initialQuery, elevation = 'base', panelBg = 'var(--grey-50)', chatFill = 'filled', onReportFullscreen, onOpenReportInEditMode, onOpenReportCreatedPage, canvasDashboardHero = false, onOpenDashboardEditMode, canvasDashboardEditHero = false, onSplitCanvasOpenChange, onCollapseDashboardSideChat, scheduleCanvasShellSplit = false, onOpenScheduleShellSplit, navSplitBootstrapNonce = 0, navSplitBootstrapKind = null, chatDockPolicy = 'always_right', splitChatColumnHidden: splitChatColumnHiddenProp, onSplitChatColumnHiddenChange }: ChatPanelProps) {
   const [messages, setMessages] = useState<Message[]>(() => {
     if (initialQuery) {
       return [
@@ -1368,8 +1368,15 @@ export function ChatPanel({ mode, orientation = 'sidebar', onOrientationChange, 
   /** Split report beside thread in full-screen chat or docked sidebar (not floating-only canvas without copilot). */
   const splitReportWithChat = isFullChat || aiCompDocked
   const splitCanvasOpen = showWorkflowPanel || showReportPanel || showSchedulePanel
-  /** Chat beside report/workflow/canvas edit — hide chat history to avoid stacked side rails. */
-  const sideBySideActive = splitCanvasOpen || Boolean(canvasDashboardEditHero)
+  /**
+   * Chat beside report/workflow/canvas edit — hide chat history to avoid stacked side rails.
+   * Also when AI is docked beside the beta dashboard / canvas / schedule shell: hide the header
+   * `view_sidebar` / chevron (global nav already has the menu on the left).
+   */
+  const sideBySideActive =
+    splitCanvasOpen ||
+    Boolean(canvasDashboardEditHero) ||
+    (aiCompDocked && (Boolean(canvasDashboardHero) || Boolean(scheduleCanvasShellSplit)))
   const showHistoryUi = showHistory && !sideBySideActive
   /** Full-screen chat + report only: equal halves. Workflow split uses fixed chat width instead. */
   const splitRailHalfHalf = isFullChat && showReportPanel
@@ -1571,6 +1578,8 @@ export function ChatPanel({ mode, orientation = 'sidebar', onOrientationChange, 
         ] as const)
 
   const showUnifiedSplitChromeBar = showUnifiedSplitChrome && !sideBySideChatVisuallyRight
+  /** Hide embedded rail “back” chevrons when unified chrome owns nav or when always-right embeds breadcrumbs in the rail (no duplicate left controls). */
+  const suppressEmbeddedRailNav = Boolean(showUnifiedSplitChrome) || sideBySideChatVisuallyRight
 
   const alwaysRightSplitCloseFromChat = sideBySideChatVisuallyRight && chatHeaderHideColumnUi
   const dockedSplitHideChatChevron = chatHeaderHideColumnUi && !sideBySideChatVisuallyRight
@@ -1659,11 +1668,12 @@ export function ChatPanel({ mode, orientation = 'sidebar', onOrientationChange, 
     (e: React.PointerEvent) => {
       if (!reportSplitDrag.current) return
       const raw = e.clientX - reportSplitDrag.current.startX
-      const delta = sideBySideChatVisuallyRight ? -raw : raw
+      /** Split rail inner row-reverse for always-right places the grip on the seam; same +raw mapping as chat-on-left. */
+      const delta = raw
       const next = clampSideBySideChatWidth(reportSplitDrag.current.startChatW + delta)
       setSideBySideChatWidthPx(next)
     },
-    [clampSideBySideChatWidth, sideBySideChatVisuallyRight],
+    [clampSideBySideChatWidth],
   )
 
   const reportSplitPointerUp = useCallback((e: React.PointerEvent) => {
@@ -1893,18 +1903,6 @@ export function ChatPanel({ mode, orientation = 'sidebar', onOrientationChange, 
               gap: 8,
             }}
           >
-            {chatHiddenBesideSplit && splitCanvasOpen && (
-              <motion.button
-                type="button"
-                whileHover={{ scale: 1.06 }}
-                whileTap={{ scale: 0.94 }}
-                onClick={() => setChatHiddenBesideSplit(false)}
-                title="Show chat"
-                style={headerIconBtn(false)}
-              >
-                <Icon name="view_sidebar" size={18} />
-              </motion.button>
-            )}
             <UnifiedSplitBreadcrumbs
               aiCompDocked={aiCompDocked}
               segments={artifactSplitBreadcrumbSegments}
@@ -1975,7 +1973,7 @@ export function ChatPanel({ mode, orientation = 'sidebar', onOrientationChange, 
           splitReportWithChat && splitCanvasOpen
             ? reportSplitDragging
               ? { duration: 0 }
-              : { type: 'spring', stiffness: 400, damping: 34, mass: 0.82 }
+              : { duration: 0.2, ease: 'easeOut' }
             : { duration: 0 }
         }
         style={{
@@ -2979,6 +2977,33 @@ export function ChatPanel({ mode, orientation = 'sidebar', onOrientationChange, 
       </div>
       </motion.div>
 
+      {/* Split seam — lives outside the rail’s motion.div so Framer layout/transform + overflow don’t eat drags (always_right). */}
+      {splitReportWithChat &&
+        (showReportPanel || showWorkflowPanel || showSchedulePanel) &&
+        !railOnlyWorkflowOrReport && (
+          <div
+            role="separator"
+            aria-orientation="vertical"
+            aria-label="Resize chat and canvas"
+            onPointerDown={splitGripPointerDown}
+            onPointerMove={splitGripPointerMove}
+            onPointerUp={reportSplitPointerUp}
+            onPointerCancel={reportSplitPointerUp}
+            style={{
+              flexShrink: 0,
+              width: SPLIT_GRIP_PX,
+              cursor: 'col-resize',
+              touchAction: 'none',
+              borderLeft: sideBySideChatVisuallyRight ? '1px solid var(--grey-200)' : undefined,
+              borderRight: sideBySideChatVisuallyRight ? undefined : '1px solid var(--grey-200)',
+              alignSelf: 'stretch',
+              background: reportSplitDragging ? 'rgba(122, 0, 93, 0.08)' : 'transparent',
+              position: 'relative',
+              zIndex: 50,
+            }}
+          />
+        )}
+
       {/* ── Split rail: report / workflow / schedule (direction anim follows dock policy) ── */}
       <AnimatePresence>
         {splitReportWithChat && (showReportPanel || showWorkflowPanel || showSchedulePanel) && (
@@ -3023,34 +3048,12 @@ export function ChatPanel({ mode, orientation = 'sidebar', onOrientationChange, 
               minWidth: SIDE_BY_SIDE_CANVAS_MIN_PX,
               overflow: 'hidden',
               display: 'flex',
-              flexDirection: 'row',
+              flexDirection: 'column',
               background: '#fff',
               borderLeft: sideBySideChatVisuallyRight ? 'none' : '1px solid var(--grey-200)',
               borderRight: sideBySideChatVisuallyRight ? '1px solid var(--grey-200)' : 'none',
             }}
           >
-            {!railOnlyWorkflowOrReport && (
-              <div
-                role="separator"
-                aria-orientation="vertical"
-                aria-label="Resize chat and canvas"
-                onPointerDown={splitGripPointerDown}
-                onPointerMove={splitGripPointerMove}
-                onPointerUp={reportSplitPointerUp}
-                onPointerCancel={reportSplitPointerUp}
-                style={{
-                  flexShrink: 0,
-                  width: SPLIT_GRIP_PX,
-                  cursor: 'col-resize',
-                  touchAction: 'none',
-                  borderRight: '1px solid var(--grey-200)',
-                  alignSelf: 'stretch',
-                  background: reportSplitDragging ? 'rgba(122, 0, 93, 0.08)' : 'transparent',
-                  position: 'relative',
-                  zIndex: 4,
-                }}
-              />
-            )}
             <div
               style={{
                 flex: 1,
@@ -3085,13 +3088,15 @@ export function ChatPanel({ mode, orientation = 'sidebar', onOrientationChange, 
                   >
                     <ScheduleCanvasView
                       embeddedInChatSplit
-                      suppressEmbeddedNav={Boolean(showUnifiedSplitChrome)}
+                      suppressEmbeddedNav={suppressEmbeddedRailNav}
                       embeddedTitleMatchChat
                       embeddedTitleFontSize={aiCompDocked ? 14 : 13}
                       embeddedTitleColor={aiCompDocked ? AI_COMP_DOCKED.ink : '#111'}
                       onClose={hideScheduleSplit}
                       onOpenChat={
-                        chatHiddenBesideSplit ? () => setChatHiddenBesideSplit(false) : undefined
+                        chatHiddenBesideSplit && !showUnifiedSplitChromeBar
+                          ? () => setChatHiddenBesideSplit(false)
+                          : undefined
                       }
                       embeddedSplitBreadcrumbs={
                         sideBySideChatVisuallyRight ? (
@@ -3122,13 +3127,15 @@ export function ChatPanel({ mode, orientation = 'sidebar', onOrientationChange, 
                   >
                     <WorkflowCanvasView
                       embeddedInChatSplit
-                      suppressEmbeddedNav={Boolean(showUnifiedSplitChrome)}
+                      suppressEmbeddedNav={suppressEmbeddedRailNav}
                       embeddedTitleMatchChat
                       embeddedTitleFontSize={aiCompDocked ? 14 : 13}
                       embeddedTitleColor={aiCompDocked ? AI_COMP_DOCKED.ink : '#111'}
                       onClose={hideWorkflowSplit}
                       onOpenChat={
-                        chatHiddenBesideSplit ? () => setChatHiddenBesideSplit(false) : undefined
+                        chatHiddenBesideSplit && !showUnifiedSplitChromeBar
+                          ? () => setChatHiddenBesideSplit(false)
+                          : undefined
                       }
                       embeddedSplitBreadcrumbs={
                         sideBySideChatVisuallyRight ? (
@@ -3160,7 +3167,7 @@ export function ChatPanel({ mode, orientation = 'sidebar', onOrientationChange, 
                     <ReportBuilderEditMode
                       embeddedInChatSplit
                       omitAvailableDataPanel={splitRailHalfHalf}
-                      suppressEmbeddedNav={Boolean(showUnifiedSplitChrome)}
+                      suppressEmbeddedNav={suppressEmbeddedRailNav}
                       embeddedTitleMatchChat
                       embeddedTitleFontSize={aiCompDocked ? 14 : 13}
                       embeddedTitleColor={aiCompDocked ? AI_COMP_DOCKED.ink : '#111'}

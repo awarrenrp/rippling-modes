@@ -26,7 +26,7 @@ export const CanvasPage = memo(function CanvasPage({
   onExpandCanvasLeftChat,
   dashboardEditMode,
   canvasEdgeShadow = 'none',
-  chatDockPolicy = 'right_and_left',
+  chatDockPolicy = 'always_right',
   onEnterEdit,
 }: CanvasPageProps) {
   const editCanvasShadow =

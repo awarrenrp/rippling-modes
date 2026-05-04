@@ -130,7 +130,6 @@ export default function App() {
   // When floating, the sidebar slot is empty (panel renders at root level)
   const chatInSidebar = chatOpen && chatOrientation === 'sidebar'
   const showNav = !isFullchat
-  const navRailDisplayed = showNav
 
   /** Canvas is split beside docked chat (dashboard edit or schedule from links / nav). */
   const canvasChatSplitDocked =
@@ -160,6 +159,12 @@ export default function App() {
   }, [activePage])
   const nav = useNavToggle(true)
   const navOpen = nav.isOpen
+  /**
+   * Canvas side-by-side: hide the left rail until Menu opens.
+   * Overlay-only shells (flow, canvas, dashboard, …): hide the collapsed 56px strip too — same as canvas split.
+   */
+  const navRailDisplayed =
+    showNav && (!canvasChatSplitDocked || navOpen) && (!navOverlayOnly || navOpen)
   const windowWidth = useWindowWidth()
   const chatWidth   = getChatWidth(windowWidth)
   /** User-dragged docked width; `null` = follow responsive `chatWidth`. */
@@ -180,6 +185,12 @@ export default function App() {
   useEffect(() => {
     if (navOverlayOnly) nav.close()
   }, [navOverlayOnly, nav])
+
+  // Entering canvas + chat split: dismiss nav so the shell isn’t narrowed by the collapsed rail.
+  useEffect(() => {
+    if (canvasChatSplitDocked) nav.close()
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- only react to split mode, not every nav.toggle
+  }, [canvasChatSplitDocked])
 
   // ── Drag-to-resize (shared by both interaction models) ───────────────────────
   const stageRef       = useRef<HTMLDivElement>(null)
@@ -562,13 +573,19 @@ export default function App() {
     setCanvasDashboardEditMode(false)
     setScheduleCanvasSplitMode(false)
     setChatSplitRailOpen(false)
+    /** Left-docked chat (`right_and_left`): logo = leave AI behind — close docked chat on Home. */
+    if (chatDockPolicy === 'right_and_left') {
+      setChatOpen(false)
+      setChatOrientation('sidebar')
+      return
+    }
     /** Leave canvas / report split behind but keep AI fullscreen — do not collapse to sidebar (that felt like minimizing both panes). */
     if (chatOrientation === 'fullscreen') {
       setChatOpen(true)
       const containerW = stageRef.current?.clientWidth ?? window.innerWidth
       animate(panelWidthMV, containerW, SPRING)
     }
-  }, [handleNavPageChange, chatOrientation, panelWidthMV])
+  }, [chatDockPolicy, chatOrientation, handleNavPageChange, panelWidthMV])
 
   const handleSideBySideSelect = useCallback(
     (id: SideBySideNavId) => {
@@ -1274,8 +1291,6 @@ export default function App() {
                       onClose={closeScheduleSideBySide}
                       panelBg={chatBg}
                       aiCompDocked
-                      showSideNavButton={canvasChatSplitDocked && !canvasLeftChatExpanded}
-                      onSideNavClick={nav.toggle}
                     />
                   )}
                   {canvasDashboardEditMode && !scheduleCanvasSplitMode && (
@@ -1284,8 +1299,6 @@ export default function App() {
                       onClose={closeDashboardSideBySide}
                       panelBg={chatBg}
                       aiCompDocked
-                      showSideNavButton={canvasChatSplitDocked && !canvasLeftChatExpanded}
-                      onSideNavClick={nav.toggle}
                     />
                   )}
                   <div

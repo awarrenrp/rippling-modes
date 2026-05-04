@@ -49,7 +49,7 @@ export const PageContent = memo(function PageContent({
   drawerMode = 'collapse', onOpenFloating, onOpenFullscreen, onCloseMainChat,
   canvasLeftChatCollapsed, onExpandCanvasLeftChat, dashboardEditMode, canvasEdgeShadow = 'none',
   onDashboardEnterEdit,
-  chatDockPolicy = 'right_and_left',
+  chatDockPolicy = 'always_right',
   scheduleSplitMode,
   onCloseScheduleSplit,
 }: PageContentProps) {
